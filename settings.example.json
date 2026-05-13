@@ -1,0 +1,27 @@
+{
+  "ai": {
+    "provider": "gemini",
+    "api_key": "YOUR_GOOGLE_AI_STUDIO_API_KEY",
+    "model": "gemini-2.0-flash"
+  },
+  "ingestion": {
+    "hmac_secret": "A_SECURE_RANDOM_STRING_FOR_GITHUB_WEBHOOKS",
+    "max_payload_size": 1048576
+  },
+  "platforms": {
+    "bluesky": {
+      "enabled": false,
+      "handle": "your-handle.bsky.social",
+      "app_password": "YOUR_BLUESKY_APP_PASSWORD"
+    },
+    "linkedin": {
+      "enabled": false,
+      "access_token": "YOUR_LINKEDIN_ACCESS_TOKEN"
+    }
+  },
+  "database": {
+    "url": "sqlite:///proofpost.db"
+  },
+  "dev_mode": false,
+  "dry_run": true
+}
