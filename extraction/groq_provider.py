@@ -1,0 +1,176 @@
+"""Groq LLM provider for fact extraction.
+
+This module implements the Groq-based fact extraction provider using 
+the groq SDK, utilizing async calls to prevent event loop blocking.
+"""
+
+import json
+import uuid
+import asyncio
+import structlog
+from groq import AsyncGroq
+from typing import Any, Dict, List, Optional
+from core.models import VerifiedBuildFact, FactType
+from extraction.base_provider import BaseLLMProvider
+
+logger = structlog.get_logger()
+
+class GroqProvider(BaseLLMProvider):
+    """LLM provider using Groq's models via the groq SDK."""
+
+    def __init__(self, api_key: str, model: str = "llama-3.3-70b-versatile"):
+        """Initializes the Groq provider.
+        
+        Args:
+            api_key: Groq Cloud API key.
+            model: Groq model identifier.
+        """
+        self.api_key = api_key
+        self.model_name = model
+        
+        # Initialize the async client
+        self.client = AsyncGroq(api_key=self.api_key)
+
+    def _extract_metadata(self, payload: Dict[str, Any]) -> Dict[str, str]:
+        """Extracts common metadata (repo, commit, event_id) from GitHub payload."""
+        repo = (
+            payload.get("repository", {}).get("full_name") or 
+            payload.get("repository", {}).get("html_url") or 
+            "unknown/repo"
+        )
+        
+        commit = (
+            payload.get("after") or 
+            payload.get("pull_request", {}).get("head", {}).get("sha") or 
+            payload.get("sha") or 
+            "unknown"
+        )
+        
+        event_id = str(payload.get("id") or uuid.uuid4())
+        
+        return {
+            "repo": repo,
+            "commit": commit,
+            "event_id": event_id
+        }
+
+    def _map_fact_type(self, raw_type: str) -> FactType:
+        """Maps Groq extracted fact types to the internal FactType enum."""
+        mapping = {
+            "feature_added": FactType.FEATURE_ADDED,
+            "bug_fixed": FactType.BUG_FIXED,
+            "performance_gain": FactType.PERFORMANCE_IMPROVED,
+            "security_fix": FactType.SECURITY_VULNERABILITY,
+            "refactor": FactType.REFACTOR_COMPLETED,
+            "dependency_update": FactType.DEPENDENCY_UPDATE,
+            "breaking_change": FactType.BREAKING_CHANGE,
+            "docs_updated": FactType.DOCS_UPDATED,
+        }
+        
+        raw_clean = raw_type.lower().strip()
+        return mapping.get(raw_clean, FactType.FEATURE_ADDED)
+
+    async def extract_facts(self, payload: Dict[str, Any]) -> List[VerifiedBuildFact]:
+        """Extracts structured facts from a raw webhook payload using Groq.
+        
+        Args:
+            payload: Raw webhook payload dictionary.
+            
+        Returns:
+            List of VerifiedBuildFact instances. Empty list on failure.
+        """
+        metadata = self._extract_metadata(payload)
+        
+        prompt = f"""
+Extract engineering facts from this GitHub webhook payload.
+For each fact, summarize the actual technical change with specificity.
+Avoid generic marketing phrases (e.g., 'Enhanced user experience', 'New feature added').
+Focus on 'What' and 'How' (e.g., 'Implemented JWT-based authentication with bcrypt password hashing' or 'Optimized SQL queries by adding composite indices on user_id and created_at').
+
+Return only facts directly supported by text in the payload.
+For each fact provide: fact_type, summary, source_snippet, detail.
+fact_type must be one of: feature_added, bug_fixed, 
+performance_gain, breaking_change, security_fix, refactor,
+docs_updated, dependency_update
+
+Payload:
+{json.dumps(payload, indent=2)}
+
+Return a JSON list of objects with the specified fields.
+"""
+        try:
+            # We also implement a 15-second timeout for robustness.
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[
+                        {"role": "system", "content": "You are an engineering fact extractor. You return ONLY raw JSON."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    response_format={"type": "json_object"}
+                ),
+                timeout=15.0
+            )
+            
+            content = response.choices[0].message.content
+            if not content:
+                logger.warning("groq_provider.empty_response")
+                return []
+                
+            text = content.strip()
+            if text.startswith("```"):
+                text = text.split("```")[1]
+                if text.startswith("json"):
+                    text = text[4:]
+            text = text.strip()
+            
+            try:
+                data = json.loads(text)
+                # Handle cases where LLM might wrap the list in an object like {"facts": [...]}
+                if isinstance(data, dict):
+                    if "facts" in data and isinstance(data["facts"], list):
+                        raw_facts = data["facts"]
+                    else:
+                        # Maybe it's a single fact object
+                        raw_facts = [data]
+                elif isinstance(data, list):
+                    raw_facts = data
+                else:
+                    logger.error("groq_provider.unexpected_format", text=text)
+                    return []
+            except json.JSONDecodeError:
+                logger.error("groq_provider.json_parse_error", text=text)
+                return []
+
+            verified_facts = []
+            for item in raw_facts:
+                try:
+                    ft_raw = item.get("fact_type", "feature_added")
+                    ft_mapped = self._map_fact_type(ft_raw)
+                    
+                    fact = VerifiedBuildFact(
+                        id=f"fact_{uuid.uuid4().hex[:8]}",
+                        source_event_id=metadata["event_id"],
+                        fact_type=ft_mapped,
+                        summary=item.get("summary", "No summary provided"),
+                        detail=item.get("detail", "No detail provided"),
+                        source_repo=metadata["repo"],
+                        source_commit=metadata["commit"],
+                        source_snippet=item.get("source_snippet"),
+                        confidence_score=0.9,
+                        verification_status="pending"
+                    )
+                    verified_facts.append(fact)
+                except Exception as e:
+                    logger.warning("groq_provider.fact_validation_error", error=str(e), item=item)
+                    continue
+            
+            logger.info("groq_provider.extraction_success", count=len(verified_facts))
+            return verified_facts
+
+        except asyncio.TimeoutError:
+            logger.error("groq_provider.timeout", timeout=15.0)
+            return []
+        except Exception as e:
+            logger.error("groq_provider.api_failure", error=str(e))
+            return []
