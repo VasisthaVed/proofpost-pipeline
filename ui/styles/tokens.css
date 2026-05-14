@@ -1,0 +1,119 @@
+/**
+ * ProofPost V1.1 — Design Tokens
+ * ui/styles/tokens.css
+ */
+
+/* Dark theme (default) */
+:root[data-theme="dark"] {
+  /* Backgrounds */
+  --bg-base:        #0D0D14;   /* page background */
+  --bg-surface:     #13131E;   /* card background */
+  --bg-raised:      #1A1A2E;   /* elevated elements */
+  --bg-overlay:     #22223A;   /* modals, dropdowns */
+
+  /* Borders */
+  --border-subtle:  #1E1E35;
+  --border-default: #2A2A45;
+  --border-strong:  #3D3D6B;
+
+  /* Text */
+  --text-primary:   #F0F0FF;
+  --text-secondary: #9898BB;
+  --text-muted:     #5A5A7A;
+  --text-inverse:   #0D0D14;
+
+  /* Brand */
+  --brand-primary:  #6366F1;   /* indigo — trust, precision */
+  --brand-glow:     rgba(99, 102, 241, 0.2);
+
+  /* Status */
+  --status-green:   #10B981;
+  --status-amber:   #F59E0B;
+  --status-red:     #EF4444;
+  --status-blue:    #3B82F6;
+  --status-purple:  #8B5CF6;
+
+  /* Status backgrounds */
+  --status-green-bg:  rgba(16, 185, 129, 0.1);
+  --status-amber-bg:  rgba(245, 158, 11, 0.1);
+  --status-red-bg:    rgba(239, 68, 68, 0.1);
+  --status-blue-bg:   rgba(59, 130, 246, 0.1);
+
+  /* Shadows */
+  --shadow-sm:  0 1px 3px rgba(0, 0, 0, 0.4);
+  --shadow-md:  0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-lg:  0 8px 32px rgba(0, 0, 0, 0.6);
+}
+
+/* Light theme */
+:root[data-theme="light"] {
+  --bg-base:        #F8F8FC;
+  --bg-surface:     #FFFFFF;
+  --bg-raised:      #F0F0F8;
+  --bg-overlay:     #EAEAF5;
+  
+  --border-subtle:  #E8E8F0;
+  --border-default: #D0D0E0;
+  --border-strong:  #B0B0CC;
+  
+  --text-primary:   #0D0D14;
+  --text-secondary: #4A4A6A;
+  --text-muted:     #9898BB;
+  --text-inverse:   #F0F0FF;
+
+  /* Status colors same as dark */
+  --status-green:   #10B981;
+  --status-amber:   #F59E0B;
+  --status-red:     #EF4444;
+  --status-blue:    #3B82F6;
+  --status-purple:  #8B5CF6;
+
+  --status-green-bg:  rgba(16, 185, 129, 0.1);
+  --status-amber-bg:  rgba(245, 158, 11, 0.1);
+  --status-red-bg:    rgba(239, 68, 68, 0.1);
+  --status-blue-bg:   rgba(59, 130, 246, 0.1);
+
+  --shadow-sm:  0 1px 3px rgba(0, 0, 0, 0.1);
+  --shadow-md:  0 4px 16px rgba(0, 0, 0, 0.1);
+  --shadow-lg:  0 8px 32px rgba(0, 0, 0, 0.1);
+}
+
+/* Shared Tokens (Theme Independent) */
+:root {
+  /* Typography */
+  --font-ui:    'Inter', system-ui, -apple-system, sans-serif;
+  --font-mono:  'JetBrains Mono', 'Fira Code', monospace;
+
+  /* Typography Scale */
+  --text-xs:   11px;
+  --text-sm:   13px;
+  --text-base: 14px;
+  --text-md:   16px;
+  --text-lg:   20px;
+  --text-xl:   28px;
+  --text-2xl:  36px;
+
+  /* Line Heights */
+  --lh-xs:     1.4;
+  --lh-sm:     1.5;
+  --lh-base:   1.6;
+  --lh-md:     1.5;
+  --lh-lg:     1.3;
+  --lh-xl:     1.2;
+  --lh-2xl:    1.1;
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  /* Radius */
+  --radius-sm:  6px;
+  --radius-md:  10px;
+  --radius-lg:  14px;
+  --radius-xl:  20px;
+}

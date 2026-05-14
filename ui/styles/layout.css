@@ -1,0 +1,102 @@
+/**
+ * ProofPost V1.1 — App Shell Layout
+ * ui/styles/layout.css
+ */
+
+.app-shell {
+  display: grid;
+  grid-template-areas:
+    "topbar topbar"
+    "sidebar main-stage";
+  grid-template-columns: 240px 1fr;
+  grid-template-rows: 64px 1fr;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+.topbar {
+  grid-area: topbar;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 var(--space-6);
+  background-color: var(--bg-surface);
+  border-bottom: 1px solid var(--border-subtle);
+  z-index: 100;
+}
+
+.sidebar {
+  grid-area: sidebar;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--bg-surface);
+  border-right: 1px solid var(--border-subtle);
+  padding: var(--space-4) 0;
+  overflow-y: auto;
+}
+
+.main-stage {
+  grid-area: main-stage;
+  background-color: var(--bg-base);
+  overflow-y: auto;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Sidebar Navigation */
+.nav-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  padding: var(--space-3) var(--space-6);
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: var(--text-sm);
+  font-weight: 500;
+  transition: all 0.2s ease;
+  border-left: 3px solid transparent;
+}
+
+.nav-item:hover {
+  background-color: var(--bg-raised);
+  color: var(--text-primary);
+}
+
+.nav-item--active {
+  background-color: var(--bg-raised);
+  color: var(--brand-primary);
+  border-left-color: var(--brand-primary);
+}
+
+/* Sidebar Footer / Status Area */
+.sidebar__footer {
+  margin-top: auto;
+  padding: var(--space-6);
+  border-top: 1px solid var(--border-subtle);
+}
+
+/* Topbar Components */
+.topbar__logo {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  font-weight: 700;
+  font-size: var(--text-md);
+  color: var(--text-primary);
+}
+
+.topbar__actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+}
