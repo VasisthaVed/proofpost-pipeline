@@ -76,7 +76,7 @@ async def test_extractor_mixed_objects():
                     id="valid_1",
                     source_event_id="e1",
                     fact_type=FactType.BUILD_SUCCESS,
-                    summary="Valid",
+                    summary="Implemented JWT authentication middleware",
                     detail="Detail",
                     source_repo="repo",
                     source_commit="commit",

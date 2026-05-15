@@ -1,15 +1,21 @@
 /**
  * ProofPost V1.1 — Design Tokens
  * ui/styles/tokens.css
+ *
+ * Single source of truth for all visual values.
+ * All colors, typography, spacing, radii, shadows, and transitions.
+ * REM-based typography for proper browser-zoom scaling.
  */
 
-/* Dark theme (default) */
+/* ============================================
+   DARK THEME (default)
+   ============================================ */
 :root[data-theme="dark"] {
   /* Backgrounds */
-  --bg-base:        #0D0D14;   /* page background */
-  --bg-surface:     #13131E;   /* card background */
-  --bg-raised:      #1A1A2E;   /* elevated elements */
-  --bg-overlay:     #22223A;   /* modals, dropdowns */
+  --bg-base:        #0D0D14;
+  --bg-surface:     #13131E;
+  --bg-raised:      #1A1A2E;
+  --bg-overlay:     #22223A;
 
   /* Borders */
   --border-subtle:  #1E1E35;
@@ -23,7 +29,7 @@
   --text-inverse:   #0D0D14;
 
   /* Brand */
-  --brand-primary:  #6366F1;   /* indigo — trust, precision */
+  --brand-primary:  #6366F1;
   --brand-glow:     rgba(99, 102, 241, 0.2);
 
   /* Status */
@@ -38,82 +44,139 @@
   --status-amber-bg:  rgba(245, 158, 11, 0.1);
   --status-red-bg:    rgba(239, 68, 68, 0.1);
   --status-blue-bg:   rgba(59, 130, 246, 0.1);
+  --status-purple-bg: rgba(139, 92, 246, 0.1);
 
-  /* Shadows */
-  --shadow-sm:  0 1px 3px rgba(0, 0, 0, 0.4);
-  --shadow-md:  0 4px 16px rgba(0, 0, 0, 0.5);
-  --shadow-lg:  0 8px 32px rgba(0, 0, 0, 0.6);
+  /* Elevation */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.08), 0 2px 4px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 12px 24px rgba(0, 0, 0, 0.12), 0 4px 8px rgba(0, 0, 0, 0.06);
+  --shadow-inset: inset 0 2px 4px rgba(0, 0, 0, 0.05);
+  --shadow-brand: 0 0 20px var(--brand-glow);
+
+  /* Overlays */
+  --overlay-bg: rgba(13, 13, 20, 0.8);
+  --overlay-blur: blur(8px);
+
+  /* Form controls (dark) */
+  --control-bg:     #13131E;
+  --control-border: #2A2A45;
+  --control-check:  #6366F1;
 }
 
-/* Light theme */
+/* ============================================
+   LIGHT THEME
+   ============================================ */
 :root[data-theme="light"] {
-  --bg-base:        #F8F8FC;
+  --bg-base:        #F5F5F7;
   --bg-surface:     #FFFFFF;
-  --bg-raised:      #F0F0F8;
-  --bg-overlay:     #EAEAF5;
-  
-  --border-subtle:  #E8E8F0;
-  --border-default: #D0D0E0;
-  --border-strong:  #B0B0CC;
-  
-  --text-primary:   #0D0D14;
-  --text-secondary: #4A4A6A;
-  --text-muted:     #9898BB;
+  --bg-raised:      #EBEBEF;
+  --bg-overlay:     #FDFDFF;
+
+  --border-subtle:  #E2E2EA;
+  --border-default: #D1D1E0;
+  --border-strong:  #A0A0C0;
+
+  --text-primary:   #1A1A26;
+  --text-secondary: #4F4F6A;
+  --text-muted:     #8F8FB0;
   --text-inverse:   #F0F0FF;
 
-  /* Status colors same as dark */
-  --status-green:   #10B981;
-  --status-amber:   #F59E0B;
-  --status-red:     #EF4444;
-  --status-blue:    #3B82F6;
-  --status-purple:  #8B5CF6;
+  --brand-primary:  #4F46E5;
+  --brand-glow:     rgba(79, 70, 229, 0.1);
 
-  --status-green-bg:  rgba(16, 185, 129, 0.1);
-  --status-amber-bg:  rgba(245, 158, 11, 0.1);
-  --status-red-bg:    rgba(239, 68, 68, 0.1);
-  --status-blue-bg:   rgba(59, 130, 246, 0.1);
+  --status-green:   #059669;
+  --status-amber:   #D97706;
+  --status-red:     #DC2626;
+  --status-blue:    #2563EB;
+  --status-purple:  #7C3AED;
 
-  --shadow-sm:  0 1px 3px rgba(0, 0, 0, 0.1);
-  --shadow-md:  0 4px 16px rgba(0, 0, 0, 0.1);
-  --shadow-lg:  0 8px 32px rgba(0, 0, 0, 0.1);
+  --status-green-bg:  #ECFDF5;
+  --status-amber-bg:  #FFFBEB;
+  --status-red-bg:    #FEF2F2;
+  --status-blue-bg:   #EFF6FF;
+  --status-purple-bg: #F5F3FF;
+
+  --shadow-sm:  0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md:  0 4px 12px rgba(0, 0, 0, 0.08);
+  --shadow-lg:  0 12px 24px rgba(0, 0, 0, 0.12);
+  --shadow-inset: inset 0 2px 4px rgba(0, 0, 0, 0.02);
+
+  --overlay-bg: rgba(245, 245, 247, 0.8);
+  --overlay-blur: blur(8px);
+
+  --control-bg:     #FFFFFF;
+  --control-border: #D1D1E0;
+  --control-check:  #4F46E5;
 }
 
-/* Shared Tokens (Theme Independent) */
+/* ============================================
+   SHARED TOKENS (Theme Independent)
+   ============================================ */
 :root {
-  /* Typography */
+  /* Typography — rem-based for proper zoom scaling */
   --font-ui:    'Inter', system-ui, -apple-system, sans-serif;
-  --font-mono:  'JetBrains Mono', 'Fira Code', monospace;
+  --font-mono:  'JetBrains Mono', 'Fira Code', 'Cascadia Code', monospace;
 
-  /* Typography Scale */
-  --text-xs:   11px;
-  --text-sm:   13px;
-  --text-base: 14px;
-  --text-md:   16px;
-  --text-lg:   20px;
-  --text-xl:   28px;
-  --text-2xl:  36px;
+  --text-xs:    0.75rem;   /* 12px @ 16px root */
+  --text-sm:    0.8125rem; /* 13px */
+  --text-base:  0.875rem;  /* 14px */
+  --text-md:    1rem;      /* 16px */
+  --text-lg:    1.125rem;  /* 18px */
+  --text-xl:    1.5rem;    /* 24px */
+  --text-2xl:   2rem;      /* 32px */
+  --text-3xl:   2.5rem;    /* 40px */
+
+  /* Weights */
+  --weight-normal:   400;
+  --weight-medium:   500;
+  --weight-semibold: 600;
+  --weight-bold:     700;
 
   /* Line Heights */
-  --lh-xs:     1.4;
-  --lh-sm:     1.5;
-  --lh-base:   1.6;
-  --lh-md:     1.5;
-  --lh-lg:     1.3;
-  --lh-xl:     1.2;
-  --lh-2xl:    1.1;
+  --lh-tight:  1.2;
+  --lh-base:   1.5;
+  --lh-loose:  1.75;
 
-  /* Spacing scale */
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 20px;
-  --space-6: 24px;
-  --space-8: 32px;
+  /* Spacing scale (rem-based) */
+  --space-0:  0;
+  --space-1:  0.25rem;  /* 4px */
+  --space-2:  0.5rem;   /* 8px */
+  --space-3:  0.75rem;  /* 12px */
+  --space-4:  1rem;     /* 16px */
+  --space-5:  1.25rem;  /* 20px */
+  --space-6:  1.5rem;   /* 24px */
+  --space-8:  2rem;     /* 32px */
+  --space-10: 2.5rem;   /* 40px */
+  --space-12: 3rem;     /* 48px */
+  --space-16: 4rem;     /* 64px */
+  --space-20: 5rem;     /* 80px */
 
   /* Radius */
-  --radius-sm:  6px;
-  --radius-md:  10px;
-  --radius-lg:  14px;
-  --radius-xl:  20px;
+  --radius-sm:   0.25rem;
+  --radius-md:   0.5rem;
+  --radius-lg:   0.75rem;
+  --radius-xl:   1.25rem;
+  --radius-full: 9999px;
+
+  /* Transitions & Animation */
+  --transition-fast: 150ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-normal: 250ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-slow: 400ms cubic-bezier(0.4, 0, 0.2, 1);
+  --transition-bounce: 500ms cubic-bezier(0.34, 1.56, 0.64, 1);
+  --transition-gentle: 300ms ease-in-out;
+
+  /* Z-Index Hierarchy */
+  --z-base: 1;
+  --z-raised: 10;
+  --z-sticky: 100;
+  --z-overlay: 1000;
+  --z-toast: 9999;
+
+  /* Accessibility */
+  --focus-ring: 0 0 0 3px var(--brand-glow);
+  --focus-ring-offset: 2px;
+
+  /* Content widths */
+  --content-max-width: 80rem;  /* 1280px */
+  --content-readable:  65ch;
 }

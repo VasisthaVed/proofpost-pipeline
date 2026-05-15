@@ -126,6 +126,33 @@ Updates application settings.
 }
 ```
 
+### POST /api/settings/test-ai
+Tests AI provider credentials with a real API call.
+- **Request Body**: `TestAIRequest`
+- **Response**: `200 OK`
+- **Body**: `TestAIResponse`
+
+---
+
+## OBSERVABILITY API
+
+### GET /api/events
+Returns recent pipeline events for the Observability view.
+- **Query Params**: `limit` (default 100)
+- **Response**: `200 OK`
+- **Body**: `EventsResponse`
+
+---
+
+## WORKSPACE API
+
+### GET /api/facts/{id}/preview
+Generates a platform-specific post preview using AI.
+- **Path Params**: `id`
+- **Query Params**: `platform` (default "bluesky")
+- **Response**: `200 OK`
+- **Body**: `PreviewResponse`
+
 ---
 
 ## ERROR SCHEMA

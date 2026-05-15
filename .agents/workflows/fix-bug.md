@@ -1,6 +1,14 @@
+---
+description: 
+---
+
 # Workflow: fix-bug
 # Trigger: /fix-bug
 # Use this when a pytest test is failing
+
+MANDATORY CONTEXT LOAD:
+Read docs/governance/constitution.md before fixing.
+Confirm with "Constitution read. Ready."
 
 ## Steps
 

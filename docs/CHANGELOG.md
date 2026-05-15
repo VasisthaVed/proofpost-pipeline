@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 - Mandated Draft Rehydration via `localStorage` in `UI_STATE_SCHEMA.md`.
 - Added Approval In-Flight guards to `WORKSPACE_STATE_MACHINE.md`.
 - Mandated Property Setters for complex component data in `UI_COMPONENT_CATALOG.md`.
+- Created `docs/v1.1/prompt.md` containing phase-by-phase implementation recipes.
 
 ### Changed
 - **CRITICAL**: Banned Shadow DOM in `UI_ENGINEERING_RULES.md` to protect `tokens.css` inheritance.

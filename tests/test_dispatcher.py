@@ -25,6 +25,7 @@ async def test_dispatcher_incremental_retry_logic():
     database = MagicMock()
     database.update_fact_payload = AsyncMock()
     database.update_fact_status = AsyncMock()
+    database.transition_fact_status = AsyncMock(return_value=True)
     database.get_recoverable_facts = AsyncMock(return_value=[])
     
     jitter = MagicMock()
@@ -56,6 +57,7 @@ async def test_dispatcher_incremental_retry_logic():
     )
     
     # 4. Run _process_fact
+    database.get_fact_with_status = AsyncMock(return_value=(fact, "approved"))
     await dispatcher._process_fact(fact, "trace-123")
     
     # 5. Verify expectations
@@ -66,8 +68,8 @@ async def test_dispatcher_incremental_retry_logic():
     assert adapter2.dispatch.call_count == 2
     
     # fact.deployed_to should contain both
-    assert "MockBluesky" in fact.deployed_to
-    assert "MockLinkedIn" in fact.deployed_to
+    assert "mockbluesky" in fact.deployed_to
+    assert "mocklinkedin" in fact.deployed_to
     
     # database.update_fact_payload should have been called at each success point
     # 1 for Bluesky success, 1 for LinkedIn success
@@ -82,6 +84,7 @@ async def test_dispatcher_already_fully_dispatched():
     event_bus = MagicMock()
     database = MagicMock()
     database.update_fact_status = AsyncMock()
+    database.transition_fact_status = AsyncMock(return_value=True)
     jitter = MagicMock()
     
     adapter1 = MockBlueskyAdapter()
@@ -99,6 +102,7 @@ async def test_dispatcher_already_fully_dispatched():
         deployed_to=["MockBluesky"]
     )
     
+    database.get_fact_with_status = AsyncMock(return_value=(fact, "approved"))
     dispatcher = Dispatcher(event_bus, database, jitter, [adapter1])
     await dispatcher._process_fact(fact, "trace-456")
     

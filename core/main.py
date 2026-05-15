@@ -33,7 +33,8 @@ from schemas.responses import (
     HealthResponse, PendingQueueResponse, FactResponse, 
     ActionResponse, HistoryResponse, HistoryItem,
     PlatformsResponse, PlatformStatus, TestPlatformResponse,
-    SettingsResponse, IngestionSettingsResponse, PlatformSettingsResponse
+    SettingsResponse, IngestionSettingsResponse, PlatformSettingsResponse,
+    EventsResponse, PipelineEvent, PreviewResponse, TestAIRequest, TestAIResponse
 )
 from pydantic import BaseModel
 import json
@@ -44,6 +45,71 @@ logger = structlog.get_logger()
 class ApprovalRequest(BaseModel):
     """Request body for fact approval, allowing optional content overrides."""
     summary: Optional[str] = None
+
+# --- Constants ---
+
+PLATFORM_CHAR_LIMITS = {
+    "bluesky": 300,
+    "linkedin": 3000,
+    "reddit": 40000,
+    "devto": 100000,
+}
+
+PLATFORM_PROMPTS = {
+    "bluesky": (
+        "Rewrite this engineering fact as a Bluesky post. "
+        "Max 280 chars. Casual, technical, direct. "
+        "No corporate language. 1-2 hashtags max at the end.\n\n"
+        "Fact: {summary}\nSource: {source_snippet}"
+    ),
+    "linkedin": (
+        "Rewrite this engineering fact as a LinkedIn post. "
+        "Professional but human. 150-250 words. "
+        "Structure: hook → context → technical fact → outcome. "
+        "3-5 hashtags at the end. No clickbait.\n\n"
+        "Fact: {summary}\nDetail: {detail}\nSource: {source_snippet}"
+    ),
+}
+
+def plain_english_error(e: Exception) -> str:
+    """Converts technical exceptions into human-readable strings."""
+    msg = str(e).lower()
+    if "401" in msg or "unauthorized" in msg or "invalid" in msg:
+        return "Invalid API key. Check your provider dashboard."
+    if "429" in msg or "quota" in msg or "exhausted" in msg:
+        return "API quota exceeded. Try again later or switch providers."
+    if "404" in msg or "not found" in msg:
+        return "Model not found. Check the model name is correct."
+    if "timeout" in msg:
+        return "Connection timed out. Check your internet connection."
+    return "Connection failed. Check your API key and try again."
+
+async def generate_with_provider(provider: Any, prompt: str) -> str:
+    """Helper to call generate_content on any provider, handling different SDK shapes."""
+    if not provider:
+        return ""
+        
+    # 1. Gemini (google-genai)
+    if hasattr(provider, "client") and hasattr(provider.client, "aio"):
+        response = await provider.client.aio.models.generate_content(
+            model=provider.model_name,
+            contents=prompt
+        )
+        return response.text or ""
+
+    # 2. Groq (groq SDK)
+    if hasattr(provider, "client") and hasattr(provider.client, "chat"):
+        response = await provider.client.chat.completions.create(
+            model=provider.model_name,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.choices[0].message.content or ""
+
+    # 3. Mock or Fallback
+    if provider.__class__.__name__ == "MockLLMProvider":
+        return f"Mock Response for: {prompt[:20]}..."
+        
+    return ""
 
 # --- Middleware ---
 
@@ -157,14 +223,35 @@ app.add_middleware(
 app.add_middleware(TraceIDMiddleware)
 
 # --- Static Files ---
-app.mount("/static", StaticFiles(directory="ui"), name="static")
+import os
+app.mount("/styles", StaticFiles(directory="ui/styles"), name="styles")
+app.mount("/components", StaticFiles(directory="ui/components"), name="components")
+app.mount("/views", StaticFiles(directory="ui/views"), name="views")
+if os.path.exists("ui/assets"):
+    app.mount("/assets", StaticFiles(directory="ui/assets"), name="assets")
 
 # --- Routes ---
 
 @app.get("/")
+@app.get("/dashboard")
+@app.get("/workspace")
+@app.get("/settings")
+@app.get("/platforms")
+@app.get("/observability")
+@app.get("/history")
+@app.get("/docs")
+@app.get("/setup")
 async def serve_ui():
     """Serves the main dashboard UI."""
     return FileResponse("ui/index.html")
+
+@app.get("/{filename}.js")
+async def serve_js(filename: str):
+    """Serves root-level JS files."""
+    valid_files = ["app", "api", "router", "store", "utils"]
+    if filename in valid_files:
+        return FileResponse(f"ui/{filename}.js")
+    raise HTTPException(status_code=404, detail="Not Found")
 
 @app.get("/health", response_model=HealthResponse)
 async def health():
@@ -247,12 +334,28 @@ async def approve_fact(fact_id: str, request: Optional[ApprovalRequest] = None):
     await state.db.update_fact_payload(fact_id, fact.model_dump_json())
     await state.bus.enqueue(fact, trace_id)
     
+    await state.db.log_event(
+        session_id=trace_id,
+        event_type="approved",
+        status="success",
+        detail=f"Fact approved: {fact.summary[:50]}...",
+        fact_id=fact_id
+    )
+    
     return {"status": "success", "message": "Fact approved for publication", "id": fact_id}
 
 @app.post("/api/facts/{fact_id}/reject", response_model=ActionResponse)
 async def reject_fact(fact_id: str):
     """Rejects a fact, preventing it from being published."""
     await state.db.update_fact_status(fact_id, "rejected")
+    
+    await state.db.log_event(
+        session_id="manual",
+        event_type="rejected",
+        status="success",
+        detail=f"Fact {fact_id} rejected by operator",
+        fact_id=fact_id
+    )
     return {"status": "success", "message": "Fact rejected", "id": fact_id}
 
 @app.get("/api/history", response_model=HistoryResponse)
@@ -448,6 +551,88 @@ async def save_settings(payload: Dict[str, Any]):
         logger.error("settings.save_failed", error=str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
+@app.get("/api/events", response_model=EventsResponse)
+async def get_events(limit: int = 100):
+    """Returns pipeline events for the Observability view."""
+    events_data = await state.db.get_events(limit)
+    events = [PipelineEvent(**e) for e in events_data]
+    return {"events": events, "total": len(events)}
+
+@app.get("/api/facts/{fact_id}/preview", response_model=PreviewResponse)
+async def get_fact_preview(fact_id: str, platform: str = "bluesky"):
+    """Generate platform-specific post preview using AI."""
+    fact = await state.db.get_fact_by_id(fact_id)
+    if not fact:
+        raise HTTPException(status_code=404, detail="Fact not found")
+
+    prompt_template = PLATFORM_PROMPTS.get(platform, PLATFORM_PROMPTS["bluesky"])
+    prompt = prompt_template.format(
+        summary=fact.summary,
+        detail=fact.detail,
+        source_snippet=fact.source_snippet or "N/A"
+    )
+
+    preview_text = fact.summary # Fallback
+    try:
+        if state.extractor and state.extractor.provider:
+            preview_text = await generate_with_provider(state.extractor.provider, prompt)
+            if not preview_text:
+                preview_text = fact.summary
+    except Exception as e:
+        logger.warning("preview.generation_failed", error=str(e), fact_id=fact_id)
+
+    char_limit = PLATFORM_CHAR_LIMITS.get(platform, 280)
+    
+    return {
+        "fact_id": fact_id,
+        "platform": platform,
+        "preview_text": preview_text,
+        "char_count": len(preview_text),
+        "char_limit": char_limit,
+        "within_limit": len(preview_text) <= char_limit
+    }
+
+@app.post("/api/settings/test-ai", response_model=TestAIResponse)
+async def test_ai_connection(request: TestAIRequest):
+    """Test AI provider credentials with a real API call."""
+    import time
+    start = time.time()
+    
+    # Create temporary settings for the test provider
+    from core.config import AISettings
+    test_ai_settings = AISettings(
+        provider=request.provider,
+        api_key=request.api_key,
+        model=request.model
+    )
+    
+    # We need a partial Settings object that create_provider expects
+    class TempSettings:
+        def __init__(self, ai):
+            self.ai = ai
+    
+    try:
+        provider = create_provider(TempSettings(ai=test_ai_settings))
+        # minimal test prompt
+        await generate_with_provider(provider, "Reply with 'OK' and nothing else.")
+        
+        latency = int((time.time() - start) * 1000)
+        return {
+            "success": True,
+            "provider": request.provider,
+            "message": "Connected successfully",
+            "model_confirmed": request.model,
+            "latency_ms": latency
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "provider": request.provider,
+            "message": plain_english_error(e),
+            "model_confirmed": None,
+            "latency_ms": None
+        }
+
 @app.post("/webhook/github")
 async def github_webhook(request: Request):
     """Ingestion endpoint for GitHub webhooks."""
@@ -455,7 +640,21 @@ async def github_webhook(request: Request):
     
     # 1. Size Check
     body = await request.body()
+    
+    await state.db.log_event(
+        session_id=trace_id,
+        event_type="webhook_received",
+        status="success",
+        detail=f"Payload {len(body)} bytes"
+    )
+
     if not check_size(body, max_kb=state.settings.ingestion.max_payload_size // 1024):
+        await state.db.log_event(
+            session_id=trace_id,
+            event_type="size_check",
+            status="failed",
+            detail=f"Payload {len(body)} exceeds limit"
+        )
         raise HTTPException(status_code=413, detail="Payload too large")
     
     # 2. Signature Check
@@ -484,6 +683,13 @@ async def github_webhook(request: Request):
     # 6. Extraction (LLM)
     extracted_facts = await state.extractor.extract(clean_payload)
     
+    await state.db.log_event(
+        session_id=trace_id,
+        event_type="extraction_complete",
+        status="success" if extracted_facts else "info",
+        detail=f"Extracted {len(extracted_facts)} facts"
+    )
+    
     # 7. Verification (Deterministic)
     verified_facts = []
     for fact in extracted_facts:
@@ -492,9 +698,22 @@ async def github_webhook(request: Request):
     # 8. Filtering
     final_facts = filter_verified(verified_facts, trace_id=trace_id)
     
-    # Enforce mandatory Human-In-The-Loop publishing gate
+    await state.db.log_event(
+        session_id=trace_id,
+        event_type="verification_complete",
+        status="success",
+        detail=f"Verified {len(final_facts)} facts (from {len(extracted_facts)} total)"
+    )
+    
     # We DO NOT enqueue to EventBus here. Operator must approve via dashboard.
     await state.db.persist_pipeline_result(final_facts, payload_hash)
+    
+    await state.db.log_event(
+        session_id=trace_id,
+        event_type="persisted_to_db",
+        status="success",
+        detail=f"Queued {len(final_facts)} facts for approval"
+    )
     
     return {
         "status": "accepted", 

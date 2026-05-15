@@ -16,9 +16,9 @@
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"/>
-    <img src="https://img.shields.io/badge/FastAPI-0.115-009688?style=flat-square&logo=fastapi&logoColor=white" alt="FastAPI"/>
     <img src="https://img.shields.io/badge/SQLite-local--first-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite"/>
-    <img src="https://img.shields.io/badge/status-V1_Alpha-orange?style=flat-square" alt="Status"/>
+    <img src="https://img.shields.io/badge/status-V1.1-blue?style=flat-square" alt="Status"/>
+    <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"/>
     <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"/>
   </p>
 </p>
@@ -34,7 +34,7 @@ Every merged PR, every performance fix, every breaking change — these are valu
 **ProofPost closes that gap.** It watches your GitHub activity, extracts the engineering facts, verifies them against the actual source code, and prepares professional draft posts — all under your full editorial control.
 
 > [!IMPORTANT]
-> ProofPost is in **Operational Alpha (V1)**. The core pipeline is stable for single-user local use. See [V1 Limitations](#v1-limitations) before deploying.
+> ProofPost is currently in **V1.1**. The core pipeline is stable for single-user local use, including live platform previews and real-time observability telemetry. See [V1 Limitations](#v1-limitations) before deploying.
 
 ---
 
@@ -346,9 +346,9 @@ ProofPost V1 is a single-operator tool. These are known constraints, not bugs:
 
 | Version | Focus |
 |---|---|
-| **V1.1** | Platform previews, connection health checks, settings validation |
-| **V1.2** | Batch approval, platform-specific formatting |
-| **V2.0** | Multi-platform orchestration, MCP integration |
+| **V1.1 (Current)** | Platform previews, connection health checks, settings validation, full frontend stabilization |
+| **V1.2** | Batch approval, advanced platform-specific formatting, and Draft AI refinement |
+| **V2.0** | Multi-platform orchestration, MCP integration, multi-user support |
 
 See the full [Roadmap](./docs/ROADMAP.md).
 

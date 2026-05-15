@@ -141,16 +141,19 @@ async def test_approve_fact(client):
         confidence_score=1.0, source_snippet="Snippet"
     )
     
-    with patch.object(state.db, "get_fact_by_id", new_callable=AsyncMock) as mock_get_fact:
-        mock_get_fact.return_value = mock_fact
-        with patch.object(state.db, "update_fact_status", new_callable=AsyncMock) as mock_update:
-            with patch.object(state.bus, "enqueue", new_callable=AsyncMock) as mock_enqueue:
-                response = client.post("/api/facts/f1/approve")
-                
-                assert response.status_code == 200
-                assert response.json()["status"] == "success"
-                mock_update.assert_called_with("f1", "approved")
-                mock_enqueue.assert_called_once()
+    with patch.object(state.db, "get_fact_with_status", new_callable=AsyncMock) as mock_get_fact:
+        mock_get_fact.return_value = (mock_fact, "pending")
+        with patch.object(state.db, "transition_fact_status", new_callable=AsyncMock) as mock_transition:
+            mock_transition.return_value = True
+            with patch.object(state.db, "update_fact_payload", new_callable=AsyncMock) as mock_update_payload:
+                with patch.object(state.bus, "enqueue", new_callable=AsyncMock) as mock_enqueue:
+                    response = client.post("/api/facts/f1/approve")
+                    
+                    assert response.status_code == 200
+                    assert response.json()["status"] == "success"
+                    mock_transition.assert_called_with("f1", ["pending"], "approved")
+                    mock_update_payload.assert_called_once()
+                    mock_enqueue.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_reject_fact(client):
@@ -264,3 +267,98 @@ async def test_dev_mode_skips_hmac(test_settings):
                     )
                     assert response.status_code == 200
                     assert response.json()["status"] == "accepted"
+
+@pytest.mark.asyncio
+async def test_get_events_empty(client):
+    """GET /api/events returns empty list when no events logged."""
+    with patch.object(state.db, "get_events", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = []
+        response = client.get("/api/events")
+        assert response.status_code == 200
+        assert response.json()["events"] == []
+        assert response.json()["total"] == 0
+
+@pytest.mark.asyncio
+async def test_get_events_with_data(client):
+    """GET /api/events returns logged events."""
+    mock_events = [{
+        "id": "evt_1",
+        "session_id": "sess_1",
+        "event_type": "webhook_received",
+        "timestamp": "2026-05-15T12:00:00Z",
+        "status": "success",
+        "detail": "test",
+        "duration_ms": 10,
+        "fact_id": None
+    }]
+    with patch.object(state.db, "get_events", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_events
+        response = client.get("/api/events")
+        assert response.status_code == 200
+        assert len(response.json()["events"]) == 1
+        assert response.json()["events"][0]["event_type"] == "webhook_received"
+
+@pytest.mark.asyncio
+async def test_get_preview_bluesky(client):
+    """GET /api/facts/{id}/preview returns preview for bluesky."""
+    from core.models import VerifiedBuildFact, FactType
+    mock_fact = VerifiedBuildFact(
+        id="f1", source_event_id="e1", fact_type=FactType.BUILD_SUCCESS,
+        summary="Test summary", detail="Test detail", source_repo="r", source_commit="c",
+        confidence_score=1.0
+    )
+    
+    with patch.object(state.db, "get_fact_by_id", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_fact
+        with patch("core.main.generate_with_provider", new_callable=AsyncMock) as mock_gen:
+            mock_gen.return_value = "Generated Bluesky Post"
+            response = client.get("/api/facts/f1/preview?platform=bluesky")
+            assert response.status_code == 200
+            assert response.json()["preview_text"] == "Generated Bluesky Post"
+            assert response.json()["platform"] == "bluesky"
+
+@pytest.mark.asyncio
+async def test_get_preview_fallback(client):
+    """Preview returns fact summary when AI fails."""
+    from core.models import VerifiedBuildFact, FactType
+    mock_fact = VerifiedBuildFact(
+        id="f1", source_event_id="e1", fact_type=FactType.BUILD_SUCCESS,
+        summary="Fallback summary", detail="Test detail", source_repo="r", source_commit="c",
+        confidence_score=1.0
+    )
+    
+    with patch.object(state.db, "get_fact_by_id", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_fact
+        with patch("core.main.generate_with_provider", side_effect=Exception("AI Down")):
+            response = client.get("/api/facts/f1/preview")
+            assert response.status_code == 200
+            assert response.json()["preview_text"] == "Fallback summary"
+
+@pytest.mark.asyncio
+async def test_test_ai_success(client):
+    """POST /api/settings/test-ai returns success with mock provider."""
+    payload = {
+        "provider": "mock",
+        "api_key": "test_key",
+        "model": "test_model"
+    }
+    # create_provider returns MockLLMProvider by default if provider is not gemini/groq
+    response = client.post("/api/settings/test-ai", json=payload)
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+    assert response.json()["message"] == "Connected successfully"
+
+@pytest.mark.asyncio
+async def test_test_ai_invalid_key(client):
+    """POST /api/settings/test-ai returns failure for invalid key."""
+    payload = {
+        "provider": "mock",
+        "api_key": "invalid_key",
+        "model": "test_model"
+    }
+    
+    with patch("core.main.generate_with_provider", side_effect=Exception("401 Unauthorized")):
+        response = client.post("/api/settings/test-ai", json=payload)
+        assert response.status_code == 200
+        assert response.json()["success"] is False
+        assert "Invalid API key" in response.json()["message"]

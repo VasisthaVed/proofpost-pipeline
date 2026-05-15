@@ -24,19 +24,22 @@ const initialState = {
     initialized: false,
     loading: false,
     route: 'dashboard',
-    setupComplete: false,
+    setupComplete: localStorage.getItem(STORAGE_KEYS.ONBOARDING) === 'true',
     apiOnline: false,
     version: 'v1.1',
     theme: localStorage.getItem(STORAGE_KEYS.THEME) || 'dark',
     lastHealthCheck: null
   },
   ui: {
-    activeModal: null,
+    activeModal: null, // { title, body, confirmLabel, onConfirm }
     sidebarCollapsed: localStorage.getItem(STORAGE_KEYS.SIDEBAR) === 'true',
+    setupStep: parseInt(localStorage.getItem(STORAGE_KEYS.SETUP_STEP) || '1'),
     toastQueue: [],
     focusedFactId: null,
     keyboardMode: false,
-    globalError: null
+    globalError: null,
+    setupStep: 1,
+    activeSettingsTab: 'ai'
   },
   workspace: {
     selectedFactId: null,
@@ -44,18 +47,22 @@ const initialState = {
     facts: [],
     loading: false,
     error: null,
-    draftContent: '',
+    draftContent: {
+      bluesky: '',
+      linkedin: ''
+    },
     originalContent: '',
-    hasUnsavedChanges: false,
     verificationExpanded: true,
     dispatching: false,
-    dispatchResult: null
+    dispatchResult: null,
+    previewMode: false
   },
   observability: {
     events: [],
     polling: false,
     lastEventId: null,
-    connectionStatus: 'online'
+    connectionStatus: 'online',
+    endpointUnavailable: false
   },
   settings: {
     loaded: false,
@@ -168,6 +175,14 @@ export const actions = {
     this._mutate(() => { store.app.route = route; });
   },
 
+  setSetupComplete(val) {
+    this._mutate(() => { 
+      store.app.setupComplete = val;
+      localStorage.setItem(STORAGE_KEYS.ONBOARDING, val);
+      if (val) localStorage.removeItem(STORAGE_KEYS.SETUP_STEP);
+    });
+  },
+
   setTheme(theme) {
     this._mutate(() => {
       store.app.theme = theme;
@@ -193,12 +208,48 @@ export const actions = {
 
   addToast(toast) {
     this._mutate(() => {
-      store.ui.toastQueue.push({ ...toast, id: Date.now() });
+      const newToast = { 
+        ...toast, 
+        id: Date.now(),
+        persist: toast.type === 'error' // Errors persist by default
+      };
+      store.ui.toastQueue.push(newToast);
       if (store.ui.toastQueue.length > 3) store.ui.toastQueue.shift();
     });
   },
 
+  setSetupStep(step) {
+    this._mutate(() => { 
+      store.ui.setupStep = step;
+      localStorage.setItem(STORAGE_KEYS.SETUP_STEP, step);
+    });
+  },
+
+  setSettingsTab(tab) {
+    this._mutate(() => { store.ui.activeSettingsTab = tab; });
+  },
+
+  setModal(modal) {
+    this._mutate(() => { store.ui.activeModal = modal; });
+  },
+
+  closeModal() {
+    this._mutate(() => { store.ui.activeModal = null; });
+  },
+
   // --- WORKSPACE ACTIONS ---
+
+  selectPlatform(platform) {
+    this._mutate(() => { store.workspace.selectedPlatform = platform; });
+  },
+
+  setPreviewMode(val) {
+    this._mutate(() => { store.workspace.previewMode = val; });
+  },
+
+  setDispatching(val) {
+    this._mutate(() => { store.workspace.dispatching = val; });
+  },
 
   setPendingFacts(facts) {
     this._mutate(() => {
@@ -212,28 +263,31 @@ export const actions = {
       const fact = store.workspace.facts.find(f => f.id === id);
       if (fact) {
         store.workspace.originalContent = fact.summary;
-        // Rehydration logic
-        const draft = localStorage.getItem(STORAGE_KEYS.DRAFT_PREFIX + id);
-        store.workspace.draftContent = draft || fact.summary;
-        store.workspace.hasUnsavedChanges = !!draft && draft !== fact.summary;
+        // Rehydration logic per platform
+        const platforms = ['bluesky', 'linkedin'];
+        platforms.forEach(platform => {
+          const draftKey = `${STORAGE_KEYS.DRAFT_PREFIX}${id}_${platform}`;
+          const draft = localStorage.getItem(draftKey);
+          store.workspace.draftContent[platform] = draft || fact.summary;
+        });
       } else {
         store.workspace.originalContent = '';
-        store.workspace.draftContent = '';
-        store.workspace.hasUnsavedChanges = false;
+        store.workspace.draftContent = { bluesky: '', linkedin: '' };
       }
     });
   },
 
   updateDraft(content) {
     this._mutate(() => {
-      store.workspace.draftContent = content;
-      store.workspace.hasUnsavedChanges = content !== store.workspace.originalContent;
+      const platform = store.workspace.selectedPlatform;
+      store.workspace.draftContent[platform] = content;
       
       if (store.workspace.selectedFactId) {
-        if (store.workspace.hasUnsavedChanges) {
-          localStorage.setItem(STORAGE_KEYS.DRAFT_PREFIX + store.workspace.selectedFactId, content);
+        const draftKey = `${STORAGE_KEYS.DRAFT_PREFIX}${store.workspace.selectedFactId}_${platform}`;
+        if (content !== store.workspace.originalContent) {
+          localStorage.setItem(draftKey, content);
         } else {
-          localStorage.removeItem(STORAGE_KEYS.DRAFT_PREFIX + store.workspace.selectedFactId);
+          localStorage.removeItem(draftKey);
         }
       }
     });
@@ -241,11 +295,28 @@ export const actions = {
 
   clearDraft(id) {
     this._mutate(() => {
-      localStorage.removeItem(STORAGE_KEYS.DRAFT_PREFIX + id);
+      const platforms = ['bluesky', 'linkedin'];
+      platforms.forEach(platform => {
+        localStorage.removeItem(`${STORAGE_KEYS.DRAFT_PREFIX}${id}_${platform}`);
+      });
+      
       if (store.workspace.selectedFactId === id) {
-        store.workspace.draftContent = store.workspace.originalContent;
-        store.workspace.hasUnsavedChanges = false;
+        store.workspace.draftContent = {
+          bluesky: store.workspace.originalContent,
+          linkedin: store.workspace.originalContent
+        };
       }
+    });
+  },
+
+  resetDraft() {
+    this._mutate(() => {
+      const id = store.workspace.selectedFactId;
+      if (!id) return;
+      
+      const platform = store.workspace.selectedPlatform;
+      localStorage.removeItem(`${STORAGE_KEYS.DRAFT_PREFIX}${id}_${platform}`);
+      store.workspace.draftContent[platform] = store.workspace.originalContent;
     });
   },
 
@@ -274,11 +345,35 @@ export const actions = {
     });
   },
 
+  setObservabilityEvents(events) {
+    this._mutate(() => { store.observability.events = events; });
+  },
+
+  setObservabilityUnavailable(val) {
+    this._mutate(() => { store.observability.endpointUnavailable = val; });
+  },
+
+  clearObservabilityEvents() {
+    this._mutate(() => { store.observability.events = []; });
+  },
+
+  setPlatforms(items) {
+    this._mutate(() => {
+      store.platforms.items = items;
+    });
+  },
+
   // --- HISTORY ACTIONS ---
 
   setHistoryItems(items) {
     this._mutate(() => {
       store.history.items = items;
+    });
+  },
+
+  setHistoryFilters(filters) {
+    this._mutate(() => {
+      store.history.filters = { ...store.history.filters, ...filters };
     });
   }
 };

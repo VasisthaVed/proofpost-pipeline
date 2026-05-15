@@ -66,6 +66,7 @@ The current development cycle (V1.1) is now under **Governance Freeze**.
 | [WORKSPACE_STATE_MACHINE.md](file:///c:/Pro/PROJECT/ProofPost/docs/v1.1/WORKSPACE_STATE_MACHINE.md) | Fact lifecycle inside the Workspace. | **ACTIVE** |
 | [PLATFORM_RENDERING_SPEC.md](file:///c:/Pro/PROJECT/ProofPost/docs/v1.1/PLATFORM_RENDERING_SPEC.md) | Platform-specific formatting rules. | **ACTIVE** |
 | [ROUTING_SPEC.md](file:///c:/Pro/PROJECT/ProofPost/docs/v1.1/ROUTING_SPEC.md) | Authoritative routing rules and guards. | **ACTIVE** |
+| [prompt.md](file:///c:/Pro/PROJECT/ProofPost/docs/v1.1/prompt.md) | **Master Implementation Prompts** (Phase-by-phase). | **ACTIVE** |
 
 ### 📜 Legacy References (`docs/ui/`)
 | File | Description | Status |

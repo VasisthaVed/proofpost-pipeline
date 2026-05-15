@@ -1,3 +1,7 @@
+---
+description: 
+---
+
 # Workflow: ui-review
 # Trigger: /ui-review
 # Run after every major frontend phase
@@ -7,10 +11,13 @@
 # MANDATORY CONTEXT LOAD
 
 Read these files:
+-C:\Pro\PROJECT\ProofPost\docs\governance\ai_rules.md
 - docs/governance/constitution.md
 - docs/v1.1/UI_ENGINEERING_RULES.md
 - docs/v1.1/UI_SPEC.md
 - docs/v1.1/UI_STATE_SCHEMA.md
+-C:\Pro\PROJECT\ProofPost\docs\v1.1 all the v1.1 docs 
+
 
 Confirm with:
 "Constitution read. UI rules read. UI state read. Ready."
@@ -22,6 +29,7 @@ Confirm with:
 ALLOWED:
 - Read any frontend file
 - Output findings only
+- add prompt to /fix-bug with all the docs that are imp to read by ai before triggering In the report file at the very very bottom
 
 FORBIDDEN:
 - Modifying files
@@ -162,3 +170,5 @@ Design system violations:
 Recommended actions:
 OK to proceed: YES or NO
 ```
+
+finally find what is missing make a report in the main   file named missing things ( if our ui is okay or shifted )  final review needs to have all  the errors gone 

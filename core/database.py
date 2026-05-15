@@ -7,6 +7,7 @@ and basic database operations using aiosqlite.
 import aiosqlite
 import json
 import structlog
+import uuid
 from typing import List, Optional, Any, Dict
 from datetime import datetime, timezone
 from core.models import VerifiedBuildFact
@@ -91,6 +92,19 @@ class Database:
             CREATE TABLE IF NOT EXISTS idempotency (
                 hash TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL
+            )
+        """)
+
+        await self._connection.execute("""
+            CREATE TABLE IF NOT EXISTS pipeline_events (
+                id          TEXT PRIMARY KEY,
+                session_id  TEXT NOT NULL,
+                event_type  TEXT NOT NULL,
+                timestamp   TEXT NOT NULL,
+                status      TEXT NOT NULL,
+                detail      TEXT,
+                duration_ms INTEGER,
+                fact_id     TEXT
             )
         """)
         
@@ -380,3 +394,41 @@ class Database:
                     "url": None 
                 })
             return items
+
+    async def log_event(
+        self,
+        session_id: str,
+        event_type: str,
+        status: str,
+        detail: str = None,
+        duration_ms: int = None,
+        fact_id: str = None
+    ) -> None:
+        """Logs a pipeline event to the database."""
+        if not self._connection:
+            await self.connect()
+        assert self._connection is not None
+        
+        event_id = f"evt_{uuid.uuid4().hex[:8]}"
+        now = datetime.now(timezone.utc).isoformat()
+        
+        await self._connection.execute(
+            """INSERT INTO pipeline_events 
+               (id, session_id, event_type, timestamp, status, detail, duration_ms, fact_id) 
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (event_id, session_id, event_type, now, status, detail, duration_ms, fact_id)
+        )
+        await self._connection.commit()
+        logger.debug("database.event_logged", event_type=event_type, status=status)
+
+    async def get_events(self, limit: int = 100) -> List[Dict[str, Any]]:
+        """Retrieves recent pipeline events."""
+        if not self._connection:
+            await self.connect()
+        assert self._connection is not None
+        
+        async with self._connection.execute(
+            "SELECT * FROM pipeline_events ORDER BY timestamp DESC LIMIT ?", (limit,)
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [dict(row) for row in rows]

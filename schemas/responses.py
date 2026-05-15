@@ -93,3 +93,37 @@ class WebhookResponse(BaseModel):
     facts_extracted: int
     facts_verified: int
     trace_id: str
+
+class PipelineEvent(BaseModel):
+    id: str
+    session_id: str
+    event_type: str
+    timestamp: str
+    status: str
+    detail: Optional[str] = None
+    duration_ms: Optional[int] = None
+    fact_id: Optional[str] = None
+
+class EventsResponse(BaseModel):
+    events: List[PipelineEvent]
+    total: int
+
+class PreviewResponse(BaseModel):
+    fact_id: str
+    platform: str
+    preview_text: str
+    char_count: int
+    char_limit: int
+    within_limit: bool
+
+class TestAIRequest(BaseModel):
+    provider: str
+    api_key: str
+    model: str
+
+class TestAIResponse(BaseModel):
+    success: bool
+    provider: str
+    message: str
+    model_confirmed: Optional[str] = None
+    latency_ms: Optional[int] = None

@@ -129,12 +129,17 @@ export const api = {
   }),
 
   /**
-   * Settings
+   * Settings & Verification
    */
   getSettings: () => request('/api/settings'),
 
   saveSettings: (data) => request('/api/settings', {
     method: 'POST',
     body: data
+  }),
+
+  testAIKey: (provider, apiKey) => request('/api/settings/test-ai', {
+    method: 'POST',
+    body: { provider, api_key: apiKey }
   })
 };
