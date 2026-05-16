@@ -149,7 +149,9 @@ async def generate_with_provider(provider: Any, prompt: str) -> str:
         import asyncio
         headers = {
             "Authorization": f"Bearer {provider.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ProofPost/1.1"
         }
         if provider.__class__.__name__ == "OpenRouterProvider":
             headers.update({

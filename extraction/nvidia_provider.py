@@ -101,7 +101,9 @@ Return a JSON list of objects with the specified fields.
             
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ProofPost/1.1"
             }
             payload = json.dumps({
                 "model": self.model_name,
@@ -196,7 +198,11 @@ Return a JSON list of objects with the specified fields.
                 import urllib.error
                 req = urllib.request.Request(
                     "https://integrate.api.nvidia.com/v1/models",
-                    headers={"Authorization": f"Bearer {self.api_key}"}
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Accept": "application/json",
+                        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ProofPost/1.1"
+                    }
                 )
                 try:
                     with urllib.request.urlopen(req, timeout=10.0) as res:

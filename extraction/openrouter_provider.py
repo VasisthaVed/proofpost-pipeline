@@ -102,6 +102,8 @@ Return a JSON list of objects with the specified fields.
             headers = {
                 "Authorization": f"Bearer {self.api_key}",
                 "Content-Type": "application/json",
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ProofPost/1.1",
                 "HTTP-Referer": "https://github.com/VasisthaVed/proofpost-pipeline",
                 "X-Title": "ProofPost"
             }
@@ -195,6 +197,8 @@ Return a JSON list of objects with the specified fields.
             
             headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
             headers.update({
+                "Accept": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) ProofPost/1.1",
                 "HTTP-Referer": "https://github.com/VasisthaVed/proofpost-pipeline",
                 "X-Title": "ProofPost"
             })
