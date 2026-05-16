@@ -28,7 +28,7 @@ const initialState = {
     route: '/dashboard',
     setup_complete: localStorage.getItem(STORAGE_KEYS.ONBOARDING) === 'true',
     api_online: false,
-    version: 'v1.1',
+    version: 'v1.1.1',
     theme: localStorage.getItem(STORAGE_KEYS.THEME) || 'dark',
     last_health_check: null,
     server_hydrated: false,

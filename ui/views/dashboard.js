@@ -142,7 +142,7 @@ export function render(container, state) {
               <div class="flex flex-col gap-4">
                 <div>
                   <span class="label">Version</span>
-                  <div class="text-sm font-mono">v1.1.0-stable</div>
+                  <div class="text-sm font-mono">v1.1.1-stable</div>
                 </div>
                 <div>
                   <span class="label">Environment</span>
