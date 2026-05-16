@@ -6,7 +6,7 @@ from execution.dispatcher import Dispatcher
 
 class MockBlueskyAdapter:
     async def dispatch(self, fact):
-        return True
+        return {"success": True, "url": "https://bsky.app/mock", "error": None}
 
 class MockLinkedInAdapter:
     def __init__(self):
@@ -15,7 +15,7 @@ class MockLinkedInAdapter:
         self.call_count += 1
         if self.call_count == 1:
             return Exception("Temporary error")
-        return True
+        return {"success": True, "url": "https://linkedin.com/mock", "error": None}
 
 @pytest.mark.asyncio
 async def test_dispatcher_incremental_retry_logic():
@@ -27,12 +27,13 @@ async def test_dispatcher_incremental_retry_logic():
     database.update_fact_status = AsyncMock()
     database.transition_fact_status = AsyncMock(return_value=True)
     database.get_recoverable_facts = AsyncMock(return_value=[])
+    database.log_event = AsyncMock()
     
     jitter = MagicMock()
     jitter.wait_backoff = AsyncMock()
     
     adapter1 = MockBlueskyAdapter()
-    adapter1.dispatch = AsyncMock(return_value=True)
+    adapter1.dispatch = AsyncMock(return_value={"success": True, "url": "https://bsky.app/mock", "error": None})
     
     adapter2 = MockLinkedInAdapter()
     # We wrap it to track calls more easily
@@ -85,6 +86,7 @@ async def test_dispatcher_already_fully_dispatched():
     database = MagicMock()
     database.update_fact_status = AsyncMock()
     database.transition_fact_status = AsyncMock(return_value=True)
+    database.log_event = AsyncMock()
     jitter = MagicMock()
     
     adapter1 = MockBlueskyAdapter()

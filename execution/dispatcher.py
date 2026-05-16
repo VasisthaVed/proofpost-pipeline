@@ -6,7 +6,7 @@ publication across all configured platforms with retry logic and DLQ support.
 
 import asyncio
 import structlog
-from typing import List, Protocol, Optional
+from typing import List, Protocol, Optional, Dict, Any
 from core.models import VerifiedBuildFact, VerificationStatus
 from core.database import Database
 from execution.event_bus import EventBus, EventBusShutdownError
@@ -18,7 +18,7 @@ logger = structlog.get_logger()
 class PlatformAdapter(Protocol):
     """Protocol defining the interface for platform-specific publishers."""
     async def authenticate(self) -> bool: ...
-    async def dispatch(self, fact: VerifiedBuildFact) -> bool: ...
+    async def dispatch(self, fact: VerifiedBuildFact) -> Dict[str, Any]: ...
 
 class Dispatcher:
     """Orchestrates fact publication across multiple platforms."""
@@ -165,7 +165,7 @@ class Dispatcher:
                     adapter = pending_adapters[i]
                     name = type(adapter).__name__.replace("Adapter", "")
                     
-                    if result is True:
+                    if isinstance(result, dict) and result.get("success") is True:
                         new_successes.append(name.lower())
                         log.info("dispatcher.adapter_success", adapter=name, attempt=attempt)
                     else:
@@ -197,8 +197,22 @@ class Dispatcher:
         # 3. Final Status Update
         if success:
             await self.db.update_fact_status(fact.id, "dispatched")
+            await self.db.log_event(
+                session_id=trace_id,
+                event_type="dispatched",
+                status="success",
+                detail=f"Successfully published to: {', '.join(fact.deployed_to)}",
+                fact_id=fact.id
+            )
             log.info("dispatcher.fact_published_successfully", total_platforms=fact.deployed_to)
         else:
             await self.db.update_fact_status(fact.id, "failed", error=last_error)
             await self.dlq.store(fact, last_error=last_error)
+            await self.db.log_event(
+                session_id=trace_id,
+                event_type="dispatch_failed",
+                status="failed",
+                detail=f"Dispatch failed: {last_error}",
+                fact_id=fact.id
+            )
             log.error("dispatcher.fact_moved_to_dlq", error=last_error)
