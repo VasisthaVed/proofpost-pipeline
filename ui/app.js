@@ -6,6 +6,7 @@
 import { store, actions, subscribe } from './store.js';
 import { initRouter, navigate } from './router.js';
 import { escapeHtml } from './utils.js';
+import { api } from './api.js';
 
 // Import Custom Elements
 import './components/status-dot.js';
@@ -15,6 +16,27 @@ import './components/loading.js';
 import './components/empty-state.js';
 import './components/platform-card.js';
 import { initToastManager } from './components/toast.js';
+
+/**
+ * One-shot server sync before first route render (operator truth on cold load).
+ */
+async function hydrateFromServer() {
+  const [h, s, pl, hist, facts, aiStat] = await Promise.all([
+    api.getHealth(),
+    api.getSettings(),
+    api.getPlatforms(),
+    api.getHistory(),
+    api.getPendingFacts(),
+    api.getAiStatus()
+  ]);
+  if (h.success) actions.updateHealth(h.data);
+  else actions.updateHealth({ online: false });
+  if (s.success) actions.updateSettings(s.data);
+  if (pl.success) actions.setPlatforms(pl.data.platforms || []);
+  if (hist.success) actions.setHistoryItems(hist.data.items || []);
+  if (facts.success) actions.setPendingFacts(facts.data.items || []);
+  if (aiStat.success) actions.updateAiStatus(aiStat.data);
+}
 
 /**
  * Boot the application
@@ -55,11 +77,25 @@ async function boot() {
   // 3. Subscribe to state changes for global UI updates
   subscribe((state) => updateGlobalUI(state));
 
-  // 4. Initialize Router & Toast
-  initRouter();
+  try {
+    await hydrateFromServer();
+  } finally {
+    actions.setServerHydrated(true);
+  }
+
+  // 4. Initialize Router & Toast (first paint after store matches server)
+  await initRouter();
   initToastManager();
 
   actions.setInitialized(true);
+
+  // 5. Global Health & AI Polling (fixes BUG-B11)
+  setInterval(async () => {
+    const [h, aiStat] = await Promise.all([api.getHealth(), api.getAiStatus()]);
+    if (h.success) actions.updateHealth(h.data);
+    else actions.updateHealth({ online: false });
+    if (aiStat.success) actions.updateAiStatus(aiStat.data);
+  }, 5000);
 }
 
 /**
@@ -67,6 +103,7 @@ async function boot() {
  */
 function updateGlobalUI(state) {
   document.documentElement.setAttribute('data-theme', state.app.theme);
+  document.documentElement.toggleAttribute('data-server-hydrated', Boolean(state.app.server_hydrated));
   
   const shell = document.getElementById('app-shell');
   if (shell) {
@@ -75,9 +112,15 @@ function updateGlobalUI(state) {
 
   const dot = document.getElementById('global-status-dot');
   const text = document.getElementById('global-status-text');
+  const aiText = document.getElementById('global-ai-status-text');
   
-  if (dot) dot.setAttribute('status', state.app.apiOnline ? 'online' : 'offline');
-  if (text) text.textContent = state.app.apiOnline ? 'OPERATIONAL' : 'DISCONNECTED';
+  if (dot) dot.setAttribute('status', state.app.api_online ? 'online' : 'offline');
+  if (text) text.textContent = state.app.api_online ? 'OPERATIONAL' : 'DISCONNECTED';
+  if (aiText) {
+    const p = state.app.ai_status?.working_provider?.toUpperCase() || 'MOCK';
+    const m = state.app.ai_status?.working_model || '';
+    aiText.textContent = `AI: ${p} ${m ? `(${m})` : ''}`;
+  }
 
   document.querySelectorAll('.nav-item').forEach(item => {
     const route = item.getAttribute('data-route');
@@ -94,26 +137,19 @@ function updateGlobalUI(state) {
   }
 
   if (state.ui.activeModal) {
-    modal.setAttribute('title', state.ui.activeModal.title);
+    modal.modalTitle = state.ui.activeModal.title;
+    modal.bodyText = state.ui.activeModal.body;
+    modal.bodyIsPre = Boolean(state.ui.activeModal.bodyIsPre);
+    modal.confirmLabel = state.ui.activeModal.confirmLabel || (state.ui.activeModal.hideCancel ? 'Close' : 'Confirm');
+    modal.hideCancel = Boolean(state.ui.activeModal.hideCancel);
     modal.open = true;
-    
-    // Inject body and actions (since pp-modal uses innerHTML, we do it safely)
-    const body = modal.querySelector('.modal-body');
-    const footer = modal.querySelector('.modal-footer');
-    
-    if (body && footer) {
-      body.innerHTML = `<p class="text-secondary">${escapeHtml(state.ui.activeModal.body)}</p>`;
-      footer.innerHTML = `
-        <button class="btn btn--ghost" id="modal-cancel">Cancel</button>
-        <button class="btn btn--primary" id="modal-confirm">${state.ui.activeModal.confirmLabel || 'Confirm'}</button>
-      `;
-      
-      footer.querySelector('#modal-cancel').onclick = () => actions.closeModal();
-      footer.querySelector('#modal-confirm').onclick = () => {
-        state.ui.activeModal.onConfirm();
-        actions.closeModal();
-      };
-    }
+
+    if (modal._confirmHandler) modal.removeEventListener('pp-confirm', modal._confirmHandler);
+    modal._confirmHandler = () => {
+      if (state.ui.activeModal?.onConfirm) state.ui.activeModal.onConfirm();
+      actions.closeModal();
+    };
+    modal.addEventListener('pp-confirm', modal._confirmHandler);
   } else {
     modal.open = false;
   }

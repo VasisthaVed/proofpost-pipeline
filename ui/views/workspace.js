@@ -8,12 +8,17 @@
 import { api } from '../api.js';
 import { store, actions, subscribe } from '../store.js';
 import { escapeHtml } from '../utils.js';
+import { 
+  fetchPendingFactsService, 
+  generatePreviewService, 
+  approveFactService, 
+  rejectFactService 
+} from '../services/workspace-service.js';
 
 let unsubscribe = null;
 let isLoading = false;
 
 // Preview Integration State
-const previewCache = new Map(); // key: factId_platform, value: { text, source }
 let isGenerating = false;
 let generationError = null;
 
@@ -21,58 +26,16 @@ async function loadPreviewForCurrentState() {
   const { workspace } = store;
   if (!workspace.selectedFactId) return;
   
-  const fact = workspace.facts.find(f => f.id === workspace.selectedFactId);
-  if (!fact) return;
-
-  const cacheKey = `${workspace.selectedFactId}_${workspace.selectedPlatform}`;
-  
-  // 1. Caching: If we already fetched this draft, ensure store originalContent matches
-  if (previewCache.has(cacheKey)) {
-    const cached = previewCache.get(cacheKey);
-    if (workspace.originalContent !== cached.text) {
-      actions._mutate(() => { store.workspace.originalContent = cached.text; });
-    }
-    return;
-  }
-
-  // 2. Local Edits check: Don't overwrite if user has a saved local edit
-  const currentDraft = workspace.draftContent[workspace.selectedPlatform];
-  const hasLocalEdit = currentDraft && currentDraft !== fact.summary;
-
-  // 3. Fetching: Call the backend API to generate the preview
   isGenerating = true;
   generationError = null;
   render(document.getElementById('view-container'), store); // trigger loading UI
 
-  try {
-    const res = await api.getPreview(workspace.selectedFactId, workspace.selectedPlatform);
-    if (res.success) {
-      const isFallback = res.data.preview_text === fact.summary;
-      previewCache.set(cacheKey, { text: res.data.preview_text, source: isFallback ? 'fallback' : 'ai' });
-      
-      // Update original content for diff tracking
-      actions._mutate(() => { store.workspace.originalContent = res.data.preview_text; });
-
-      // Apply to editor only if user hasn't made local modifications
-      if (!hasLocalEdit) {
-        actions.updateDraft(res.data.preview_text);
-      }
-    } else {
-      // 4. Graceful Fallback on API Error
-      generationError = res.error?.message || 'Failed to connect to AI provider';
-      previewCache.set(cacheKey, { text: fact.summary, source: 'error' });
-      if (!hasLocalEdit) {
-        actions._mutate(() => { store.workspace.originalContent = fact.summary; });
-        actions.updateDraft(fact.summary);
-      }
-    }
-  } catch (err) {
-    generationError = 'Network error during AI generation.';
-    previewCache.set(cacheKey, { text: fact.summary, source: 'error' });
-  } finally {
-    isGenerating = false;
-    render(document.getElementById('view-container'), store);
+  const res = await generatePreviewService(workspace.selectedFactId, workspace.selectedPlatform);
+  if (!res.success && res.error) {
+    generationError = res.error;
   }
+  isGenerating = false;
+  render(document.getElementById('view-container'), store);
 }
 
 /**
@@ -139,7 +102,7 @@ function renderReviewPanel(fact, workspace, isAppLoading) {
   const isPreview = workspace.previewMode;
 
   const cacheKey = `${fact.id}_${workspace.selectedPlatform}`;
-  const cacheEntry = previewCache.get(cacheKey);
+  const cacheEntry = workspace.previewCache[cacheKey];
 
   // 5. Provenance Display
   let provenanceHtml = '';
@@ -181,9 +144,11 @@ function renderReviewPanel(fact, workspace, isAppLoading) {
       <nav class="preview-tabs">
         <button class="tab-item ${workspace.selectedPlatform === 'bluesky' ? 'tab-item--active' : ''}" data-platform="bluesky">
           <span>🦋</span> Bluesky
+          ${workspace.draftContent?.bluesky && workspace.draftContent.bluesky !== workspace.originalContent ? '<span class="badge badge--warning text-[10px] ml-1" title="Unsaved local edits">Modified</span>' : ''}
         </button>
         <button class="tab-item ${workspace.selectedPlatform === 'linkedin' ? 'tab-item--active' : ''}" data-platform="linkedin">
           <span>🔗</span> LinkedIn
+          ${workspace.draftContent?.linkedin && workspace.draftContent.linkedin !== workspace.originalContent ? '<span class="badge badge--warning text-[10px] ml-1" title="Unsaved local edits">Modified</span>' : ''}
         </button>
         
         <div class="ml-auto flex items-center py-2">
@@ -368,26 +333,8 @@ async function handleApprove() {
   const { workspace } = store;
   if (workspace.dispatching || !workspace.selectedFactId) return;
 
-  actions.setDispatching(true);
-
   const currentDraft = workspace.draftContent[workspace.selectedPlatform] || '';
-  const res = await api.approveFact(workspace.selectedFactId, currentDraft);
-  
-  if (res.success) {
-    actions.addToast({ type: 'success', message: 'Fact dispatched successfully!' });
-    actions.clearDraft(workspace.selectedFactId);
-    
-    // Refresh facts
-    const factsRes = await api.getPendingFacts();
-    if (factsRes.success) actions.setPendingFacts(factsRes.data.items);
-    
-    actions.selectFact(null);
-    actions.setPreviewMode(false);
-  } else {
-    actions.addToast({ type: 'error', message: `Dispatch failed: ${res.error.message}` });
-  }
-
-  actions.setDispatching(false);
+  await approveFactService(workspace.selectedFactId, currentDraft);
 }
 
 /**
@@ -397,20 +344,7 @@ async function handleReject() {
   const { workspace } = store;
   if (workspace.dispatching || !workspace.selectedFactId) return;
 
-  const res = await api.rejectFact(workspace.selectedFactId);
-  if (res.success) {
-    actions.addToast({ type: 'success', message: 'Fact discarded.' });
-    actions.clearDraft(workspace.selectedFactId);
-    
-    // Refresh facts
-    const factsRes = await api.getPendingFacts();
-    if (factsRes.success) actions.setPendingFacts(factsRes.data.items);
-    
-    actions.selectFact(null);
-    actions.setPreviewMode(false);
-  } else {
-    actions.addToast({ type: 'error', message: `Action failed: ${res.error.message}` });
-  }
+  await rejectFactService(workspace.selectedFactId);
 }
 
 /**
@@ -421,15 +355,14 @@ export async function onActivate() {
   const container = document.getElementById('view-container');
   if (container) render(container, store);
 
-  // Refresh facts on entry
-  const res = await api.getPendingFacts();
+  let res = { success: true, data: { items: store.workspace.facts } };
+  if (!store.app.server_hydrated) {
+    res = await fetchPendingFactsService();
+  }
   isLoading = false;
   
   if (res.success) {
-    actions.setPendingFacts(res.data.items);
-    
-    // Auto-select first fact if none selected and fetch preview
-    if (!store.workspace.selectedFactId && res.data.items.length > 0) {
+    if (!store.workspace.selectedFactId && res.data?.items?.length > 0) {
       actions.selectFact(res.data.items[0].id);
       loadPreviewForCurrentState();
     }

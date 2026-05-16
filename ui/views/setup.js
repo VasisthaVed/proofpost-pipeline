@@ -4,16 +4,29 @@
  */
 
 import { api } from '../api.js';
+import { defaultModelForProvider, normalizeAiSettings } from '../ai-defaults.js';
 import { actions, subscribe, store } from '../store.js';
 import { escapeHtml } from '../utils.js';
 
 let unsubscribe = null;
 let isVerifying = false;
+let setupSigLast = '';
+
+function setupRenderSignature(state) {
+  const step = state.ui?.setupStep;
+  const ai = state.settings?.ai || {};
+  const bsky = state.settings?.platforms?.bluesky || {};
+  return `${step}__${ai.provider}__${ai.model}__${Boolean(ai.api_key)}__${bsky.enabled}__${bsky.handle}__${Boolean(bsky.app_password)}__${isVerifying}`;
+}
 
 /**
  * Render the Setup Wizard
  */
 export function render(container, state) {
+  const sig = setupRenderSignature(state);
+  if (sig === setupSigLast && container.querySelector('.setup-layout')) return;
+  setupSigLast = sig;
+
   const { ui } = state;
   const step = ui.setupStep;
 
@@ -30,11 +43,16 @@ export function render(container, state) {
         </div>
 
         <div class="setup-footer">
-          ${step > 1 && step < 5 ? `<button class="btn btn--ghost" id="btn-prev" ${isVerifying ? 'disabled' : ''}>Back</button>` : ''}
-          ${step < 5 ? `<button class="btn btn--primary" id="btn-next" ${isVerifying ? 'disabled' : ''}>
-            ${isVerifying ? '<pp-loading type="spinner" class="p-0"></pp-loading>' : (step === 1 ? 'Get Started' : 'Continue')}
-          </button>` : ''}
-          ${step === 5 ? `<button class="btn btn--primary" id="btn-finish">Open Dashboard</button>` : ''}
+          ${step > 1 && step < 5 ? `<button class="btn btn--ghost" id="btn-prev" ${isVerifying ? 'disabled' : ''}>Back</button>` : '<div></div>'}
+          <div class="flex gap-2">
+            ${step < 5 ? `
+              <button class="btn btn--ghost btn--sm" id="btn-skip">Skip Step</button>
+              <button class="btn btn--primary" id="btn-next" ${isVerifying ? 'disabled' : ''}>
+                ${isVerifying ? '<pp-loading type="spinner" class="p-0"></pp-loading>' : (step === 1 ? 'Get Started' : 'Continue')}
+              </button>
+            ` : ''}
+            ${step === 5 ? `<button class="btn btn--primary" id="btn-finish">Open Dashboard</button>` : ''}
+          </div>
         </div>
       </div>
     </div>
@@ -74,6 +92,8 @@ function renderStep(step, state) {
               <select id="ai-provider" class="input">
                 <option value="gemini" ${state.settings.ai.provider === 'gemini' ? 'selected' : ''}>Google Gemini (Recommended)</option>
                 <option value="groq" ${state.settings.ai.provider === 'groq' ? 'selected' : ''}>Groq (Llama 3)</option>
+                <option value="nvidia" ${state.settings.ai.provider === 'nvidia' ? 'selected' : ''}>NVIDIA NIM (Llama 3.1 70B)</option>
+                <option value="openrouter" ${state.settings.ai.provider === 'openrouter' ? 'selected' : ''}>OpenRouter (Auto / Multi-Model)</option>
                 <option value="mock" ${state.settings.ai.provider === 'mock' ? 'selected' : ''}>Mock (Local Debugging)</option>
               </select>
             </div>
@@ -141,11 +161,19 @@ function renderStep(step, state) {
           <p class="text-sm text-secondary mb-6">Configure GitHub webhooks to trigger the pipeline.</p>
           
           <div class="webhook-info p-5 bg-raised border border-subtle rounded-lg mb-6">
-            <label class="label text-xs uppercase tracking-wider text-muted mb-2 block">Canonical Endpoint</label>
+            <div class="flex items-center justify-between mb-4 pb-4 border-b border-subtle">
+              <div class="flex items-center gap-2">
+                <div id="ngrok-indicator" class="w-2 h-2 rounded-full bg-secondary"></div>
+                <span class="text-sm font-bold" id="ngrok-status-text">Checking ngrok tunnel...</span>
+              </div>
+              <button class="btn btn--outline btn--sm" id="btn-check-ngrok">Check Tunnel</button>
+            </div>
+            <label class="label text-xs uppercase tracking-wider text-muted mb-2 block">Webhook Payload URL</label>
             <div class="flex gap-2">
               <input type="text" id="webhook-url" readonly class="input bg-surface text-secondary mono text-xs" value="${window.location.origin}/webhook/github">
-              <button class="btn btn--outline btn--sm" onclick="navigator.clipboard.writeText(document.getElementById('webhook-url').value); this.textContent='Copied!'">Copy</button>
+              <button class="btn btn--outline btn--sm" id="btn-copy-webhook">Copy</button>
             </div>
+            <p class="text-xs text-brand font-bold mt-3 hidden m-0" id="ngrok-success-note">✓ ngrok tunnel detected! Paste the URL above directly into your GitHub Repository > Settings > Webhooks.</p>
           </div>
 
           <div class="github-instructions text-sm bg-surface p-5 border border-subtle rounded-lg">
@@ -155,9 +183,9 @@ function renderStep(step, state) {
             <p class="text-xs text-muted mb-4">If running ProofPost on localhost, you need a tunnel like <b>ngrok</b> to receive webhooks.</p>
             <div class="p-3 bg-raised rounded mono text-xs mb-4">
               # In your terminal:<br>
-              ngrok http 8000
+              ngrok http 7821
             </div>
-            <p class="text-xs text-muted">Then, use the <b>Forwarding URL</b> provided by ngrok (e.g. https://xyz.ngrok-free.app) and append <b>/webhook/github</b> to it in GitHub Settings.</p>
+            <p class="text-xs text-muted m-0">Ensure ngrok is active in your terminal, then click <b>Check Tunnel</b> above to automatically retrieve your public webhook URL.</p>
           </div>
         </div>
       `;
@@ -207,21 +235,38 @@ async function attachListeners(container, step, state) {
       
       if (!key) { showError('ai-key', 'API key is required.'); return; }
       
-      if (key !== '****') {
-        isVerifying = true;
-        render(container, store);
-        const res = await api.testAIKey(provider, key);
-        isVerifying = false;
+      isVerifying = true;
+      render(container, store); // show loading spinner
+
+      try {
+        // 1. Verify connection first
+        const model = defaultModelForProvider(provider);
+        const testRes = await api.testAIKey(provider, key === '****' ? store.settings.ai.api_key : key, model);
         
-        if (res.success) {
-          actions.updateSettings({ ai: { provider, api_key: key } });
-          actions.setSetupStep(3);
+        if (testRes.success) {
+          // 2. Save settings to backend
+          const saveRes = await api.saveSettings({
+            ai: normalizeAiSettings({ provider, api_key: key, model })
+          });
+          
+          if (saveRes.success) {
+            // 3. Update local state and advance
+            actions.updateSettings({ ai: normalizeAiSettings({ provider, api_key: key, model }) });
+            actions.setSetupStep(3);
+          } else {
+            showError('ai-key', `Failed to save settings: ${saveRes.error.message}`);
+          }
         } else {
-          showError('ai-key', res.error.message);
-          render(container, store);
+          showError('ai-key', testRes.error.message);
         }
-      } else {
-        actions.setSetupStep(3);
+      } catch (err) {
+        showError('ai-key', 'System error during setup. Check backend logs.');
+      } finally {
+        isVerifying = false;
+        // No need to call render() here as actions.setSetupStep will trigger it via subscribe
+        // If we didn't advance, the subscribe won't trigger, so we SHOULD render.
+        const state = store;
+        if (state.ui.setupStep === 2) render(container, state);
       }
     } else if (step === 3) {
       const handle = container.querySelector('#bsky-handle').value;
@@ -229,23 +274,81 @@ async function attachListeners(container, step, state) {
       if (!handle) { showError('bsky-handle', 'Handle required.'); return; }
       if (!key) { showError('bsky-key', 'Password required.'); return; }
       
-      actions.updateSettings({ 
-        platforms: { 
-          bluesky: { 
-            enabled: true, 
-            handle: handle, 
-            app_password: key === '****' ? store.settings.platforms.bluesky.app_password : key 
+      isVerifying = true;
+      render(container, store);
+
+      try {
+        const platformData = { 
+          platforms: { 
+            bluesky: { 
+              enabled: true, 
+              handle: handle, 
+              app_password: key === '****' ? store.settings.platforms.bluesky.app_password : key 
+            } 
           } 
-        } 
-      });
-      actions.setSetupStep(4);
+        };
+        
+        const res = await api.saveSettings(platformData);
+        if (res.success) {
+          actions.updateSettings(platformData);
+          actions.setSetupStep(4);
+        } else {
+          actions.addToast({ type: 'error', message: `Failed to save: ${res.error.message}` });
+        }
+      } finally {
+        isVerifying = false;
+        if (store.ui.setupStep === 3) render(container, store);
+      }
     } else if (step === 4) {
       actions.setSetupStep(5);
     }
   });
 
+  if (step === 4) {
+    const checkNgrok = async () => {
+      const btn = container.querySelector('#btn-check-ngrok');
+      const ind = container.querySelector('#ngrok-indicator');
+      const text = container.querySelector('#ngrok-status-text');
+      const input = container.querySelector('#webhook-url');
+      const note = container.querySelector('#ngrok-success-note');
+      if (!btn || !ind || !text || !input) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Checking...';
+      const res = await api.getNgrokStatus();
+      btn.disabled = false;
+      btn.textContent = 'Check Tunnel';
+
+      if (res.success && res.data?.connected && res.data?.public_url) {
+        ind.className = 'w-2 h-2 rounded-full bg-brand-primary animate-pulse';
+        text.textContent = 'ngrok Tunnel Active'; text.className = 'text-sm font-bold text-brand';
+        input.value = `${res.data.public_url}/webhook/github`;
+        if (note) note.classList.remove('hidden');
+      } else {
+        ind.className = 'w-2 h-2 rounded-full bg-red';
+        text.textContent = 'ngrok Tunnel Not Detected'; text.className = 'text-sm font-bold text-red';
+        input.value = `${window.location.origin}/webhook/github`;
+        if (note) note.classList.add('hidden');
+      }
+    };
+    checkNgrok();
+    container.querySelector('#btn-check-ngrok')?.addEventListener('click', checkNgrok);
+    container.querySelector('#btn-copy-webhook')?.addEventListener('click', (e) => {
+      const input = container.querySelector('#webhook-url');
+      if (input) {
+        navigator.clipboard.writeText(input.value);
+        e.target.textContent = 'Copied!';
+        setTimeout(() => e.target.textContent = 'Copy', 2000);
+      }
+    });
+  }
+
   container.querySelector('#btn-prev')?.addEventListener('click', () => {
     actions.setSetupStep(step - 1);
+  });
+
+  container.querySelector('#btn-skip')?.addEventListener('click', () => {
+    actions.setSetupStep(step + 1);
   });
 
   container.querySelector('#btn-finish')?.addEventListener('click', () => {
@@ -265,7 +368,8 @@ async function attachListeners(container, step, state) {
     btn.disabled = true;
     btn.textContent = 'Testing...';
     
-    const res = await api.testAIKey(provider, key === '****' ? store.settings.ai.api_key : key);
+    const model = defaultModelForProvider(provider);
+    const res = await api.testAIKey(provider, key === '****' ? store.settings.ai.api_key : key, model);
     
     btn.disabled = false;
     btn.textContent = 'Test Connection';
@@ -291,7 +395,18 @@ async function attachListeners(container, step, state) {
     btn.disabled = true;
     btn.textContent = 'Verifying...';
 
-    // Simulated for now as backend test endpoint might vary, but use canonical adapter test
+    const platformData = { 
+      platforms: { 
+        bluesky: { 
+          enabled: true, 
+          handle: handle, 
+          app_password: key === '****' ? store.settings.platforms?.bluesky?.app_password : key 
+        } 
+      } 
+    };
+    await api.saveSettings(platformData);
+    actions.updateSettings(platformData);
+
     const res = await api.testPlatform('bluesky');
     
     btn.disabled = false;
@@ -311,6 +426,7 @@ async function attachListeners(container, step, state) {
  * View Lifecycle
  */
 export async function onActivate() {
+  setupSigLast = '';
   const container = document.getElementById('view-container');
   if (container) render(container, store);
 

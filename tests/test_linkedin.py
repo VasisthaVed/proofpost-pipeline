@@ -44,31 +44,36 @@ async def test_authenticate_failure():
 
 @pytest.mark.asyncio
 async def test_dispatch_success(adapter, sample_fact):
-    """Should return True on 201 Created response."""
+    """Should return success dictionary on 201 Created response."""
     with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
-        mock_post.return_value = MagicMock(status_code=201)
+        mock_resp = MagicMock(status_code=201, text='{"id": "urn:li:ugcPost:123"}')
+        mock_resp.json.return_value = {"id": "urn:li:ugcPost:123"}
+        mock_post.return_value = mock_resp
         
         result = await adapter.dispatch(sample_fact)
         
-        assert result is True
+        assert result["success"] is True
+        assert result["url"] == "https://www.linkedin.com/feed/update/urn:li:ugcPost:123"
         mock_post.assert_called_once()
         args, kwargs = mock_post.call_args
         assert kwargs["json"]["author"] == "urn:li:person:123"
 
 @pytest.mark.asyncio
 async def test_dispatch_failure(adapter, sample_fact):
-    """Should return False on 401 Unauthorized response."""
+    """Should return failure dictionary on 401 Unauthorized response."""
     with patch("httpx.AsyncClient.post", new_callable=AsyncMock) as mock_post:
         mock_post.return_value = MagicMock(status_code=401, text="Unauthorized")
         
         result = await adapter.dispatch(sample_fact)
         
-        assert result is False
+        assert result["success"] is False
+        assert result["error"] == "Unauthorized"
 
 @pytest.mark.asyncio
 async def test_dispatch_network_error(adapter, sample_fact):
-    """Should return False on network exceptions."""
+    """Should return failure dictionary on network exceptions."""
     import httpx
     with patch("httpx.AsyncClient.post", side_effect=httpx.RequestError("Conn error")):
         result = await adapter.dispatch(sample_fact)
-        assert result is False
+        assert result["success"] is False
+        assert "Conn error" in result["error"]

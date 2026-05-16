@@ -74,34 +74,33 @@ function attachListeners(container) {
 }
 
 function renderEvent(event, isLatest) {
-  const isError = event.level === 'error' || event.type === 'error';
-  const isWarning = event.level === 'warning';
+  const isError = event.status === 'error' || event.status === 'failed';
+  const isWarning = event.status === 'warning' || event.status === 'partial';
   
-  let status = 'online';
-  if (isError) status = 'offline';
-  else if (isWarning) status = 'warning';
+  let dotStatus = 'online';
+  if (isError) dotStatus = 'offline';
+  else if (isWarning) dotStatus = 'warning';
 
   return `
     <div class="timeline-item ${isLatest ? 'timeline-item--latest' : ''}">
       <div class="timeline-marker">
-        <pp-status-dot status="${status}"></pp-status-dot>
+        <pp-status-dot status="${dotStatus}"></pp-status-dot>
         <div class="timeline-line"></div>
       </div>
       <div class="timeline-content p-4">
         <div class="flex justify-between items-start mb-1">
           <div class="flex items-center gap-2">
-            <span class="font-bold text-sm">${escapeHtml(event.title || event.event || 'System Event')}</span>
+            <span class="font-bold text-sm capitalize">${escapeHtml(event.event_type.replace(/_/g, ' '))}</span>
             ${isLatest ? '<span class="badge badge--info" style="font-size: 9px;">Latest</span>' : ''}
+            ${event.fact_id ? `<span class="badge badge--ghost" style="font-size: 9px;">Fact: ${escapeHtml(event.fact_id)}</span>` : ''}
           </div>
           <span class="text-xs text-muted mono">${new Date(event.timestamp).toLocaleTimeString()}</span>
         </div>
-        <p class="text-sm text-secondary m-0">${escapeHtml(event.message || event.detail || '')}</p>
-        ${event.details ? `
-          <details class="mt-2">
-            <summary class="text-xs text-brand cursor-pointer hover:underline">View Metadata</summary>
-            <pre class="mt-2 text-xs bg-raised p-3 rounded border border-subtle overflow-x-auto"><code>${escapeHtml(JSON.stringify(event.details, null, 2))}</code></pre>
-          </details>
-        ` : ''}
+        <p class="text-sm text-secondary m-0">${escapeHtml(event.detail || '')}</p>
+        <div class="mt-2 flex items-center gap-4">
+          <div class="text-[10px] text-muted mono uppercase">Trace: ${escapeHtml(event.session_id.substring(0, 8))}</div>
+          ${event.duration_ms ? `<div class="text-[10px] text-muted mono uppercase">Duration: ${event.duration_ms}ms</div>` : ''}
+        </div>
       </div>
     </div>
   `;

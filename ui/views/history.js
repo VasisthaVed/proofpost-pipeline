@@ -32,6 +32,11 @@ export function render(container, state) {
             <option value="bluesky" ${state.history.filters.platform === 'bluesky' ? 'selected' : ''}>Bluesky</option>
             <option value="linkedin" ${state.history.filters.platform === 'linkedin' ? 'selected' : ''}>LinkedIn</option>
           </select>
+          <select class="input input--sm" id="filter-status">
+            <option value="all">All Statuses</option>
+            <option value="dispatched" ${state.history.filters.status === 'dispatched' ? 'selected' : ''}>Dispatched</option>
+            <option value="failed" ${state.history.filters.status === 'failed' ? 'selected' : ''}>Failed</option>
+          </select>
           <button class="btn btn--outline btn--sm" id="btn-export-history">Export CSV</button>
         </div>
       </div>
@@ -75,7 +80,8 @@ export function render(container, state) {
               </thead>
               <tbody>
                 ${items
-      .filter(item => state.history.filters.platform === 'all' || item.platform === state.history.filters.platform)
+      .filter(item => (state.history.filters.platform === 'all' || item.platform === state.history.filters.platform) &&
+                      (state.history.filters.status === 'all' || item.status === state.history.filters.status))
       .map(item => `
                   <tr class="border-b border-subtle hover:bg-raised transition-colors">
                     <td class="p-4">
@@ -84,8 +90,11 @@ export function render(container, state) {
                     </td>
                     <td class="p-4">
                       <div class="flex items-center gap-2">
-                        <span class="text-lg">${item.platform === 'linkedin' ? '🔗' : '🦋'}</span>
-                        <span class="text-sm font-semibold capitalize">${escapeHtml(item.platform)}</span>
+                        <div class="flex -space-x-1">
+                          ${item.platform.toLowerCase().includes('bluesky') ? '<span class="text-lg" title="Bluesky">🦋</span>' : ''}
+                          ${item.platform.toLowerCase().includes('linkedin') ? '<span class="text-lg" title="LinkedIn">🔗</span>' : ''}
+                        </div>
+                        <span class="text-sm font-semibold">${item.platform.split(', ').map(p => p.charAt(0).toUpperCase() + p.slice(1)).join(', ')}</span>
                       </div>
                     </td>
                     <td class="p-4">
@@ -94,7 +103,10 @@ export function render(container, state) {
                       </p>
                     </td>
                     <td class="p-4">
-                      <span class="badge badge--success">${escapeHtml(item.status || 'Dispatched')}</span>
+                      <div class="flex flex-col gap-1">
+                        <span class="badge badge--${item.status === 'failed' ? 'error' : 'success'}">${escapeHtml(item.status || 'Dispatched')}</span>
+                        ${item.status === 'failed' && item.error ? `<div class="text-[10px] text-red opacity-80 leading-tight" style="max-width: 150px;">${escapeHtml(item.error)}</div>` : ''}
+                      </div>
                     </td>
                     <td class="p-4 text-right">
                       ${item.url ? `
@@ -125,6 +137,10 @@ function attachListeners(container) {
 
   container.querySelector('#filter-platform')?.addEventListener('change', (e) => {
     actions.setHistoryFilters({ platform: e.target.value });
+  });
+
+  container.querySelector('#filter-status')?.addEventListener('change', (e) => {
+    actions.setHistoryFilters({ status: e.target.value });
   });
 
   container.querySelector('#btn-export-history')?.addEventListener('click', () => {

@@ -39,6 +39,7 @@ class HistoryItem(BaseModel):
     summary: str
     status: str
     url: Optional[str] = None
+    error: Optional[str] = None
 
 class HistoryResponse(BaseModel):
     items: List[HistoryItem]
@@ -48,6 +49,7 @@ class PlatformStatus(BaseModel):
     id: str
     name: str
     connected: bool
+    handle: Optional[str] = Field(None, description="Display handle when connected (never secrets)")
     last_tested: Optional[datetime] = None
     last_error: Optional[str] = None
 
@@ -63,10 +65,38 @@ class IngestionSettingsResponse(BaseModel):
     hmac_secret: Optional[str] = None
     max_payload_size: int
 
+class AIProviderConfigResponse(BaseModel):
+    id: str
+    provider: str
+    model: str
+    api_key: str
+    enabled: bool
+    priority: int
+    fallback_enabled: bool
+
+class AIProvidersListResponse(BaseModel):
+    providers: List[AIProviderConfigResponse]
+
+class AIProvidersSaveRequest(BaseModel):
+    providers: List[AIProviderConfigResponse]
+
+class AIProvidersSaveResponse(BaseModel):
+    success: bool
+    data: AIProvidersListResponse
+
+class AIProviderReorderRequest(BaseModel):
+    provider_ids: List[str]
+
+class AIProviderModelsResponse(BaseModel):
+    provider: str
+    models: List[str]
+    default_model: str
+
 class AISettingsResponse(BaseModel):
     provider: str
     api_key: Optional[str] = None
     model: str
+    providers: Optional[List[AIProviderConfigResponse]] = None
 
 class BlueskySettingsResponse(BaseModel):
     enabled: bool
@@ -81,10 +111,14 @@ class PlatformSettingsResponse(BaseModel):
     bluesky: BlueskySettingsResponse
     linkedin: LinkedInSettingsResponse
 
+class UISettingsResponse(BaseModel):
+    onboarding_complete: bool
+
 class SettingsResponse(BaseModel):
     ingestion: IngestionSettingsResponse
     ai: AISettingsResponse
     platforms: PlatformSettingsResponse
+    ui: UISettingsResponse
     dev_mode: bool
     dry_run: bool
 
@@ -118,8 +152,8 @@ class PreviewResponse(BaseModel):
 
 class TestAIRequest(BaseModel):
     provider: str
-    api_key: str
-    model: str
+    api_key: Optional[str] = None
+    model: Optional[str] = "gemini-2.0-flash-exp"
 
 class TestAIResponse(BaseModel):
     success: bool
@@ -127,3 +161,14 @@ class TestAIResponse(BaseModel):
     message: str
     model_confirmed: Optional[str] = None
     latency_ms: Optional[int] = None
+
+class NgrokStatusResponse(BaseModel):
+    connected: bool
+    public_url: Optional[str] = None
+
+class AIStatusResponse(BaseModel):
+    working_provider: Optional[str] = None
+    working_model: Optional[str] = None
+    working_id: Optional[str] = None
+    total_enabled: int = 0
+    failover_chain: List[str] = []

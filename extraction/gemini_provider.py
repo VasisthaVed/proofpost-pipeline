@@ -164,3 +164,16 @@ Return a JSON list of objects with the specified fields.
         except Exception as e:
             logger.error("gemini_provider.api_failure", error=str(e))
             return []
+
+    async def get_available_models(self) -> List[str]:
+        """Returns a list of available Gemini model IDs via the active SDK client."""
+        try:
+            models = []
+            async for m in self.client.aio.models.list():
+                if m.name and "gemini" in m.name.lower():
+                    name = m.name.replace("models/", "")
+                    models.append(name)
+            return models if models else ["gemini-2.5-pro", "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"]
+        except Exception as e:
+            logger.warning("gemini_provider.list_models_failed", error=str(e))
+            return ["gemini-2.5-pro", "gemini-2.0-flash-exp", "gemini-1.5-pro", "gemini-1.5-flash"]

@@ -143,17 +143,15 @@ async def test_approve_fact(client):
     
     with patch.object(state.db, "get_fact_with_status", new_callable=AsyncMock) as mock_get_fact:
         mock_get_fact.return_value = (mock_fact, "pending")
-        with patch.object(state.db, "transition_fact_status", new_callable=AsyncMock) as mock_transition:
+        with patch.object(state.db, "transition_and_update_fact", new_callable=AsyncMock) as mock_transition:
             mock_transition.return_value = True
-            with patch.object(state.db, "update_fact_payload", new_callable=AsyncMock) as mock_update_payload:
-                with patch.object(state.bus, "enqueue", new_callable=AsyncMock) as mock_enqueue:
-                    response = client.post("/api/facts/f1/approve")
-                    
-                    assert response.status_code == 200
-                    assert response.json()["status"] == "success"
-                    mock_transition.assert_called_with("f1", ["pending"], "approved")
-                    mock_update_payload.assert_called_once()
-                    mock_enqueue.assert_called_once()
+            with patch.object(state.bus, "enqueue", new_callable=AsyncMock) as mock_enqueue:
+                response = client.post("/api/facts/f1/approve")
+                
+                assert response.status_code == 200
+                assert response.json()["status"] == "success"
+                mock_transition.assert_called_once()
+                mock_enqueue.assert_called_once()
 
 @pytest.mark.asyncio
 async def test_reject_fact(client):
@@ -210,6 +208,73 @@ async def test_test_platform_success(client):
         assert response.status_code == 200
         assert response.json()["connected"] is True
 
+
+@pytest.mark.asyncio
+async def test_test_platform_bluesky_success(client):
+    """POST /api/platforms/bluesky/test should resolve a Bluesky adapter when present."""
+    from platforms.bluesky import BlueskyAdapter
+    mock_adapter = MagicMock(spec=BlueskyAdapter)
+    mock_adapter.authenticate = AsyncMock(return_value=True)
+
+    with patch.object(state.dispatcher, "adapters", [mock_adapter]):
+        response = client.post("/api/platforms/bluesky/test")
+        assert response.status_code == 200
+        assert response.json()["connected"] is True
+
+@pytest.mark.asyncio
+async def test_get_ngrok_status(client):
+    """GET /api/ngrok/status should query local ngrok API and return connection status."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "tunnels": [{"proto": "https", "public_url": "https://xyz.ngrok-free.app"}]
+    }
+    with patch("httpx.AsyncClient.get", new_callable=AsyncMock) as mock_get:
+        mock_get.return_value = mock_resp
+        response = client.get("/api/ngrok/status")
+        assert response.status_code == 200
+        assert response.json()["connected"] is True
+        assert response.json()["public_url"] == "https://xyz.ngrok-free.app"
+
+@pytest.mark.asyncio
+async def test_get_ai_status(client):
+    """GET /api/ai/status should inspect the failover chain and return active provider."""
+    response = client.get("/api/ai/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "working_provider" in data
+    assert "failover_chain" in data
+
+@pytest.mark.asyncio
+async def test_nvidia_provider():
+    """Verify NvidiaProvider instantiates and handles mock extraction correctly."""
+    from extraction.nvidia_provider import NvidiaProvider
+    p = NvidiaProvider(api_key="nvapi-test", model="meta/llama-3.3-70b-instruct")
+    mock_resp = MagicMock()
+    mock_resp.getcode.return_value = 200
+    mock_resp.read.return_value = b'{"choices": [{"message": {"content": "{\\"facts\\": [{\\"fact_type\\": \\"feature_added\\", \\"summary\\": \\"NVIDIA test fact\\", \\"detail\\": \\"detail\\"}]}"}}]}'
+    mock_resp.__enter__.return_value = mock_resp
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        facts = await p.extract_facts({"id": "123"})
+        assert len(facts) == 1
+        assert facts[0].summary == "NVIDIA test fact"
+
+@pytest.mark.asyncio
+async def test_openrouter_provider():
+    """Verify OpenRouterProvider instantiates and handles mock extraction correctly."""
+    from extraction.openrouter_provider import OpenRouterProvider
+    p = OpenRouterProvider(api_key="sk-or-v1-test", model="openrouter/auto")
+    mock_resp = MagicMock()
+    mock_resp.getcode.return_value = 200
+    mock_resp.read.return_value = b'{"choices": [{"message": {"content": "{\\"facts\\": [{\\"fact_type\\": \\"feature_added\\", \\"summary\\": \\"OpenRouter test fact\\", \\"detail\\": \\"detail\\"}]}"}}]}'
+    mock_resp.__enter__.return_value = mock_resp
+
+    with patch("urllib.request.urlopen", return_value=mock_resp):
+        facts = await p.extract_facts({"id": "123"})
+        assert len(facts) == 1
+        assert facts[0].summary == "OpenRouter test fact"
+
 @pytest.mark.asyncio
 async def test_get_settings_masked(client, test_settings):
     """Should return settings with masked credentials."""
@@ -250,8 +315,9 @@ async def test_save_settings(client, tmp_path):
 
 @pytest.mark.asyncio
 async def test_dev_mode_skips_hmac(test_settings):
-    """Should return 200 even with invalid signature when dev_mode is enabled."""
+    """Should return 200 even with invalid signature when dev_mode is enabled and hmac_secret is not configured."""
     test_settings.dev_mode = True
+    test_settings.ingestion.hmac_secret = ""
     payload = {"some": "data"}
     
     with patch("core.main.load_config", return_value=test_settings):
@@ -347,6 +413,14 @@ async def test_test_ai_success(client):
     assert response.status_code == 200
     assert response.json()["success"] is True
     assert response.json()["message"] == "Connected successfully"
+
+@pytest.mark.asyncio
+async def test_test_ai_mock_optional_api_key(client):
+    """POST /api/settings/test-ai accepts omitted api_key for mock provider."""
+    response = client.post("/api/settings/test-ai", json={"provider": "mock"})
+    assert response.status_code == 200
+    assert response.json()["success"] is True
+
 
 @pytest.mark.asyncio
 async def test_test_ai_invalid_key(client):

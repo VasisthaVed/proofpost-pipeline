@@ -56,57 +56,78 @@ class Database:
         - dispatch_queue: Stores facts pending publication.
         - dlq: Dead Letter Queue for failed publications.
         - idempotency: Stores hashes of processed payloads.
+        - pipeline_events: Stores observability logs.
+        - ingestion_queue: Stores durable webhook payloads.
         """
         if not self._connection:
             await self.connect()
 
         assert self._connection is not None
         
-        await self._connection.execute("""
-            CREATE TABLE IF NOT EXISTS dispatch_queue (
-                id TEXT PRIMARY KEY,
-                fact_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                retries INTEGER DEFAULT 0,
-                last_error TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        
-        await self._connection.execute("""
-            CREATE TABLE IF NOT EXISTS dlq (
-                id TEXT PRIMARY KEY,
-                fact_id TEXT NOT NULL,
-                status TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                retries INTEGER DEFAULT 0,
-                last_error TEXT,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        """)
-        
-        await self._connection.execute("""
-            CREATE TABLE IF NOT EXISTS idempotency (
-                hash TEXT PRIMARY KEY,
-                created_at TEXT NOT NULL
-            )
-        """)
+        cursor = await self._connection.execute("PRAGMA user_version;")
+        row = await cursor.fetchone()
+        current_version = row[0] if row else 0
 
-        await self._connection.execute("""
-            CREATE TABLE IF NOT EXISTS pipeline_events (
-                id          TEXT PRIMARY KEY,
-                session_id  TEXT NOT NULL,
-                event_type  TEXT NOT NULL,
-                timestamp   TEXT NOT NULL,
-                status      TEXT NOT NULL,
-                detail      TEXT,
-                duration_ms INTEGER,
-                fact_id     TEXT
-            )
-        """)
+        if current_version < 1:
+            await self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS dispatch_queue (
+                    id TEXT PRIMARY KEY,
+                    fact_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    retries INTEGER DEFAULT 0,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            
+            await self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS dlq (
+                    id TEXT PRIMARY KEY,
+                    fact_id TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    retries INTEGER DEFAULT 0,
+                    last_error TEXT,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            
+            await self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS idempotency (
+                    hash TEXT PRIMARY KEY,
+                    created_at TEXT NOT NULL
+                )
+            """)
+
+            await self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS pipeline_events (
+                    id          TEXT PRIMARY KEY,
+                    session_id  TEXT NOT NULL,
+                    event_type  TEXT NOT NULL,
+                    timestamp   TEXT NOT NULL,
+                    status      TEXT NOT NULL,
+                    detail      TEXT,
+                    duration_ms INTEGER,
+                    fact_id     TEXT
+                )
+            """)
+            
+            await self._connection.execute("""
+                CREATE TABLE IF NOT EXISTS ingestion_queue (
+                    id TEXT PRIMARY KEY,
+                    status TEXT NOT NULL,
+                    payload TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                )
+            """)
+            
+            await self._connection.execute("PRAGMA user_version = 1;")
+            await self._connection.commit()
+            logger.info("database.migration_applied", old_version=0, new_version=1)
         
         await self._connection.commit()
         logger.info("database.initialized")
@@ -207,6 +228,45 @@ class Database:
         ) as cursor:
             rows = await cursor.fetchall()
             return [VerifiedBuildFact.model_validate_json(row["payload"]) for row in rows]
+
+    async def enqueue_ingestion(self, trace_id: str, clean_payload: Dict[str, Any]) -> None:
+        """Adds a webhook payload to the durable pre-extraction ingestion queue."""
+        if not self._connection:
+            await self.connect()
+        assert self._connection is not None
+        now = datetime.now(timezone.utc).isoformat()
+        await self._connection.execute(
+            """INSERT INTO ingestion_queue 
+               (id, status, payload, created_at, updated_at) 
+               VALUES (?, ?, ?, ?, ?)""",
+            (trace_id, "pre_extraction", json.dumps(clean_payload), now, now)
+        )
+        await self._connection.commit()
+        logger.info("database.ingestion_enqueued", trace_id=trace_id)
+
+    async def complete_ingestion(self, trace_id: str) -> None:
+        """Marks an ingestion queue item as successfully extracted."""
+        if not self._connection:
+            await self.connect()
+        assert self._connection is not None
+        now = datetime.now(timezone.utc).isoformat()
+        await self._connection.execute(
+            """UPDATE ingestion_queue SET status = 'extracted', updated_at = ? WHERE id = ?""",
+            (now, trace_id)
+        )
+        await self._connection.commit()
+        logger.info("database.ingestion_completed", trace_id=trace_id)
+
+    async def get_pre_extraction_items(self) -> List[tuple[str, Dict[str, Any]]]:
+        """Retrieves all pending pre-extraction webhook payloads."""
+        if not self._connection:
+            await self.connect()
+        assert self._connection is not None
+        async with self._connection.execute(
+            "SELECT id, payload FROM ingestion_queue WHERE status = 'pre_extraction'"
+        ) as cursor:
+            rows = await cursor.fetchall()
+            return [(row["id"], json.loads(row["payload"])) for row in rows]
 
     async def persist_pipeline_result(self, facts: List[VerifiedBuildFact], payload_hash: str) -> None:
         """Atomically persists verified facts and marks the payload as processed.
@@ -310,6 +370,28 @@ class Database:
             logger.info("database.fact_status_transitioned", fact_id=fact_id, from_status=from_status, to_status=to_status)
         return success
 
+    async def transition_and_update_fact(self, fact_id: str, from_status: List[str], to_status: str, payload: str) -> bool:
+        """Atomically transitions a fact from one of several statuses to another, and updates its payload."""
+        if not self._connection:
+            await self.connect()
+        assert self._connection is not None
+        
+        placeholders = ",".join(["?"] * len(from_status))
+        query = f"""UPDATE dispatch_queue 
+                   SET status = ?, payload = ?, updated_at = ?
+                   WHERE id = ? AND status IN ({placeholders})"""
+        
+        now = datetime.now(timezone.utc).isoformat()
+        params = [to_status, payload, now, fact_id] + from_status
+        
+        cursor = await self._connection.execute(query, params)
+        await self._connection.commit()
+        
+        success = cursor.rowcount > 0
+        if success:
+            logger.info("database.fact_status_payload_transitioned", fact_id=fact_id, to_status=to_status)
+        return success
+
     async def get_queue_stats(self) -> Dict[str, int]:
         """Returns statistics about the dispatch queue."""
         if not self._connection:
@@ -367,6 +449,49 @@ class Database:
         await self._connection.commit()
         logger.info("database.fact_payload_updated", fact_id=fact_id)
 
+    async def move_fact_to_dlq(self, fact_id: str, payload: str, last_error: Optional[str] = None) -> None:
+        """Atomically moves a failed fact from the active dispatch queue to the DLQ table.
+        
+        Args:
+            fact_id: ID of the fact to move.
+            payload: JSON string representation of the VerifiedBuildFact.
+            last_error: Optional final error message.
+        """
+        if not self._connection:
+            await self.connect()
+        assert self._connection is not None
+
+        try:
+            await self._connection.execute("BEGIN TRANSACTION")
+
+            # Get existing retry count from dispatch_queue if available
+            async with self._connection.execute(
+                "SELECT retries, created_at FROM dispatch_queue WHERE fact_id = ?", 
+                (fact_id,)
+            ) as cursor:
+                row = await cursor.fetchone()
+                retries = row["retries"] if row else 3
+                created_at = row["created_at"] if row else datetime.now(timezone.utc).isoformat()
+
+            await self._connection.execute(
+                """INSERT INTO dlq 
+                   (id, fact_id, status, payload, retries, last_error, created_at, updated_at) 
+                   VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'))""",
+                (fact_id, fact_id, "failed", payload, retries, last_error, created_at)
+            )
+
+            await self._connection.execute(
+                "DELETE FROM dispatch_queue WHERE fact_id = ?", (fact_id,)
+            )
+
+            await self._connection.commit()
+            logger.info("database.moved_to_dlq", fact_id=fact_id, error=last_error)
+        except Exception as e:
+            if self._connection:
+                await self._connection.rollback()
+            logger.error("database.move_to_dlq_failed", fact_id=fact_id, error=str(e))
+            raise
+
     async def get_history(self) -> List[Dict[str, Any]]:
         """Returns the history of dispatched and failed posts."""
         if not self._connection:
@@ -374,7 +499,7 @@ class Database:
         assert self._connection is not None
         
         async with self._connection.execute(
-            "SELECT id, created_at, updated_at, payload, status FROM dispatch_queue WHERE status IN ('dispatched', 'failed') ORDER BY updated_at DESC"
+            "SELECT id, created_at, updated_at, payload, status, last_error FROM dispatch_queue WHERE status IN ('dispatched', 'failed') ORDER BY updated_at DESC"
         ) as cursor:
             rows = await cursor.fetchall()
             items = []
@@ -382,8 +507,8 @@ class Database:
                 fact = VerifiedBuildFact.model_validate_json(row["payload"])
                 platform = ", ".join(fact.deployed_to) if fact.deployed_to else "Unknown"
                 
-                # Use updated_at for dispatched items to show when they actually went out (BUG-B8)
-                display_time = row["updated_at"] if row["status"] == "dispatched" else row["created_at"]
+                # Use updated_at to show when the publication or failure actually occurred
+                display_time = row["updated_at"]
                 
                 items.append({
                     "id": row["id"],
@@ -391,7 +516,8 @@ class Database:
                     "platform": platform,
                     "summary": fact.summary,
                     "status": row["status"],
-                    "url": None 
+                    "url": fact.source_repo,
+                    "error": row["last_error"]
                 })
             return items
 

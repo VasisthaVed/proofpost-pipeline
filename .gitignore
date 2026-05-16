@@ -22,6 +22,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+*.exe
+*.winmd
 
 # Virtual Environment
 .venv/
@@ -48,6 +50,8 @@ htmlcov/
 *.db
 *.sqlite
 *.sqlite3
+*.db-shm
+*.db-wal
 
 # Logs
 *.log

@@ -93,3 +93,25 @@ async def test_update_status(db_instance):
         async with conn.execute("SELECT status FROM dispatch_queue WHERE fact_id = ?", (fact.id,)) as cursor:
             row = await cursor.fetchone()
             assert row["status"] == "dispatched"
+
+@pytest.mark.asyncio
+async def test_ingestion_queue_operations(db_instance):
+    """Test enqueuing, retrieving, and completing pre-extraction ingestion items."""
+    trace_id = "trace_123"
+    payload = {"repository": {"name": "proofpost"}}
+    
+    # Enqueue
+    await db_instance.enqueue_ingestion(trace_id, payload)
+    
+    # Retrieve
+    items = await db_instance.get_pre_extraction_items()
+    assert len(items) == 1
+    assert items[0][0] == trace_id
+    assert items[0][1]["repository"]["name"] == "proofpost"
+    
+    # Complete
+    await db_instance.complete_ingestion(trace_id)
+    
+    # Retrieve again
+    items_after = await db_instance.get_pre_extraction_items()
+    assert len(items_after) == 0

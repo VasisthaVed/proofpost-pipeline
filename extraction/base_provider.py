@@ -25,3 +25,7 @@ class BaseLLMProvider:
             NotImplementedError: Must be implemented by subclasses.
         """
         raise NotImplementedError
+
+    async def get_available_models(self) -> List[str]:
+        """Returns a list of available model IDs for this provider."""
+        return []

@@ -35,8 +35,9 @@ export class PPToast extends HTMLElement {
     
     this.className = `toast toast--${escapeHtml(type)}`;
     this.innerHTML = `
-      <div class="toast-content">
+      <div class="toast-content flex items-center justify-between gap-3 width-full">
         <span>${escapeHtml(message)}</span>
+        <button type="button" class="btn btn--icon text-lg p-1 opacity-70 hover:opacity-100 cursor-pointer" title="Click to dismiss" aria-label="Close toast">×</button>
       </div>
     `;
   }
@@ -58,13 +59,15 @@ export function initToastManager() {
   subscribe((state) => {
     const toasts = state.ui.toastQueue;
     if (toasts.length > lastToastCount) {
-      // New toast added
-      const newToast = toasts[toasts.length - 1];
-      const toastEl = document.createElement('pp-toast');
-      toastEl.setAttribute('type', newToast.type);
-      toastEl.setAttribute('message', newToast.message);
-      toastEl.setAttribute('persist', newToast.persist || 'false');
-      container.appendChild(toastEl);
+      // Add all new toasts
+      for (let i = lastToastCount; i < toasts.length; i++) {
+        const newToast = toasts[i];
+        const toastEl = document.createElement('pp-toast');
+        toastEl.setAttribute('type', newToast.type);
+        toastEl.setAttribute('message', newToast.message);
+        toastEl.setAttribute('persist', newToast.persist || 'false');
+        container.appendChild(toastEl);
+      }
     }
     lastToastCount = toasts.length;
   });

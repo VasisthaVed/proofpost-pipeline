@@ -59,11 +59,11 @@ app: {
   initialized: false,
   loading: false,
   route: 'dashboard',
-  setupComplete: false,
-  apiOnline: false,
+  setup_complete: false,
+  api_online: false,
   version: 'v1.1',
   theme: 'dark',
-  lastHealthCheck: null
+  last_health_check: null
 }
 ```
 

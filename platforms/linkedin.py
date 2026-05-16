@@ -81,14 +81,14 @@ class LinkedInAdapter:
             }
         }
 
-    async def dispatch(self, fact: VerifiedBuildFact) -> bool:
+    async def dispatch(self, fact: VerifiedBuildFact) -> Dict[str, Any]:
         """Publishes the fact to LinkedIn.
         
         Args:
             fact: The verified fact to publish.
             
         Returns:
-            True if published successfully, False otherwise.
+            A dictionary with success, url, and error information.
         """
         log = logger.bind(fact_id=fact.id, platform="linkedin")
         
@@ -109,18 +109,20 @@ class LinkedInAdapter:
                 
                 if response.status_code in (200, 201):
                     log.info("linkedin.dispatch_success", status_code=response.status_code)
-                    return True
+                    data = response.json() if response.text else {}
+                    urn = data.get("id", "urn:li:ugcPost:mock")
+                    return {"success": True, "url": f"https://www.linkedin.com/feed/update/{urn}", "error": None}
                 else:
                     log.error(
                         "linkedin.dispatch_failed", 
                         status_code=response.status_code, 
                         response=response.text
                     )
-                    return False
+                    return {"success": False, "url": None, "error": response.text}
                     
         except httpx.RequestError as e:
             log.error("linkedin.network_error", error=str(e))
-            return False
+            return {"success": False, "url": None, "error": str(e)}
         except Exception as e:
             log.error("linkedin.unexpected_error", error=str(e))
-            return False
+            return {"success": False, "url": None, "error": str(e)}

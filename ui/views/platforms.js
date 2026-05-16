@@ -9,6 +9,119 @@ import { escapeHtml } from '../utils.js';
 
 let unsubscribe = null;
 let viewError = null;
+let platformsSigLast = '';
+let platformDelegatesAbort = null;
+
+async function handlePpTest(e) {
+  if (store.app.route !== '/platforms') return;
+  const id = e.detail?.id;
+  if (!id) return;
+  actions.addToast({ type: 'info', message: `Testing ${id} connection...` });
+  const res = await api.testPlatform(id);
+  if (res.success) {
+    actions.addToast({ type: 'success', message: `${id} connection healthy.` });
+    const pr = await api.getPlatforms();
+    if (pr.success) actions.setPlatforms(pr.data.platforms || []);
+    const sr = await api.getSettings();
+    if (sr.success) actions.updateSettings(sr.data);
+    window.dispatchEvent(new CustomEvent('pp-config-changed'));
+  } else {
+    actions.addToast({ type: 'error', message: `${id} connection failed: ${res.error.message}` });
+  }
+}
+
+function handlePpConnect() {
+  if (store.app.route !== '/platforms') return;
+  actions.addToast({ type: 'info', message: 'Configure Bluesky or LinkedIn in Settings, then Save Changes.' });
+  window.dispatchEvent(
+    new CustomEvent('navigate', { detail: { path: '/settings', settingsTab: 'platforms' } })
+  );
+}
+
+async function handlePpSaveConnect(e) {
+  if (store.app.route !== '/platforms') return;
+  const { id, handle, app_password, access_token } = e.detail || {};
+  if (!id) return;
+
+  actions.addToast({ type: 'info', message: `Connecting ${id}...` });
+  actions.setLoading(true);
+
+  let payload = {};
+  if (id === 'bluesky') {
+    payload = {
+      platforms: {
+        bluesky: { enabled: true, handle, app_password }
+      }
+    };
+  } else if (id === 'linkedin') {
+    payload = {
+      platforms: {
+        linkedin: { enabled: true, access_token }
+      }
+    };
+  }
+
+  const res = await api.saveSettings(payload);
+  if (res.success) {
+    actions.addToast({ type: 'success', message: `Successfully connected to ${id}.` });
+    const pr = await api.getPlatforms();
+    if (pr.success) actions.setPlatforms(pr.data.platforms || []);
+    const sr = await api.getSettings();
+    if (sr.success) actions.updateSettings(sr.data);
+    window.dispatchEvent(new CustomEvent('pp-config-changed'));
+  } else {
+    actions.addToast({ type: 'error', message: `Failed to connect ${id}: ${res.error?.message || 'Unknown error'}` });
+  }
+  actions.setLoading(false);
+}
+
+async function handlePpDisconnect(e) {
+  if (store.app.route !== '/platforms') return;
+  const id = e.detail?.id;
+  if (!id) return;
+
+  if (!confirm(`Are you sure you want to disconnect ${id}?`)) return;
+
+  actions.addToast({ type: 'info', message: `Disconnecting ${id}...` });
+  actions.setLoading(true);
+
+  let payload = {};
+  if (id === 'bluesky') {
+    payload = {
+      platforms: {
+        bluesky: { enabled: false, handle: '', app_password: '' }
+      }
+    };
+  } else if (id === 'linkedin') {
+    payload = {
+      platforms: {
+        linkedin: { enabled: false, access_token: '' }
+      }
+    };
+  }
+
+  const res = await api.saveSettings(payload);
+  if (res.success) {
+    actions.addToast({ type: 'success', message: `Disconnected ${id}.` });
+    const pr = await api.getPlatforms();
+    if (pr.success) actions.setPlatforms(pr.data.platforms || []);
+    const sr = await api.getSettings();
+    if (sr.success) actions.updateSettings(sr.data);
+    window.dispatchEvent(new CustomEvent('pp-config-changed'));
+  } else {
+    actions.addToast({ type: 'error', message: `Failed to disconnect ${id}: ${res.error?.message || 'Unknown error'}` });
+  }
+  actions.setLoading(false);
+}
+
+function platformsRenderSignature(state) {
+  if (state.app.route !== '/platforms') return null;
+  return JSON.stringify({
+    items: state.platforms.items,
+    loading: state.app.loading,
+    err: viewError
+  });
+}
 
 /**
  * Render the Platforms view
@@ -100,8 +213,19 @@ export function render(container, state) {
 function attachListeners(container) {
   container.querySelector('#btn-retry-platforms')?.addEventListener('click', async () => {
     viewError = null;
-    render(container, store);
-    onActivate();
+    platformsSigLast = '';
+    const el = document.getElementById('view-container');
+    if (el) render(el, store);
+    actions.setLoading(true);
+    const res = await api.getPlatforms();
+    actions.setLoading(false);
+    if (res.success) {
+      actions.setPlatforms(res.data.platforms || []);
+    } else {
+      viewError = res.error?.message || 'Failed to connect to platforms API.';
+    }
+    const c2 = document.getElementById('view-container');
+    if (c2) render(c2, store);
   });
 
   container.querySelector('#btn-refresh-platforms')?.addEventListener('click', async () => {
@@ -112,51 +236,58 @@ function attachListeners(container) {
       actions.setPlatforms(res.data.platforms || []);
     }
   });
-
-  container.addEventListener('pp-test', async (e) => {
-    const id = e.detail.id;
-    actions.addToast({ type: 'info', message: `Testing ${id} connection...` });
-    const res = await api.testPlatform(id);
-    if (res.success) {
-      actions.addToast({ type: 'success', message: `${id} connection healthy.` });
-    } else {
-      actions.addToast({ type: 'error', message: `${id} connection failed: ${res.error.message}` });
-    }
-  });
-
-  container.addEventListener('pp-connect', (e) => {
-    actions.addToast({ type: 'info', message: 'Platform setup required in settings.' });
-    window.dispatchEvent(new CustomEvent('navigate', { detail: '/settings' }));
-  });
 }
 
 /**
  * View Lifecycle
  */
 export async function onActivate() {
-  if (store.platforms.items.length === 0) {
-    actions.setLoading(true);
-    const res = await api.getPlatforms();
-    actions.setLoading(false);
-    if (res.success) {
-      actions.setPlatforms(res.data.platforms || []);
-      viewError = null;
-    } else {
-      viewError = res.error?.message || 'Failed to connect to platforms API.';
-      const container = document.getElementById('view-container');
-      if (container) render(container, store);
-    }
+  if (unsubscribe) {
+    unsubscribe();
+    unsubscribe = null;
   }
+  platformDelegatesAbort?.abort();
+  platformDelegatesAbort = new AbortController();
+  const { signal } = platformDelegatesAbort;
+  const root = document.getElementById('view-container');
+  root?.addEventListener('pp-test', handlePpTest, { signal });
+  root?.addEventListener('pp-connect', handlePpConnect, { signal });
+  root?.addEventListener('pp-save-connect', handlePpSaveConnect, { signal });
+  root?.addEventListener('pp-disconnect', handlePpDisconnect, { signal });
+  root?.addEventListener('pp-error', (e) => actions.addToast({ type: 'error', message: e.detail?.message }), { signal });
 
+  platformsSigLast = '';
   unsubscribe = subscribe((state) => {
-    const container = document.getElementById('view-container');
-    if (container && state.app.route === '/platforms') {
-      render(container, state);
-    }
+    const el = document.getElementById('view-container');
+    if (!el || state.app.route !== '/platforms') return;
+    const sig = platformsRenderSignature(state);
+    if (sig == null) return;
+    if (sig === platformsSigLast) return;
+    platformsSigLast = sig;
+    render(el, state);
   });
+
+  viewError = null;
+  actions.setLoading(true);
+  let res = { success: true, data: { platforms: store.platforms.items } };
+  if (!store.app.server_hydrated) {
+    res = await api.getPlatforms();
+  }
+  actions.setLoading(false);
+  if (res.success) {
+    if (!store.app.server_hydrated) actions.setPlatforms(res.data.platforms || []);
+    const container = document.getElementById('view-container');
+    if (container) render(container, store);
+  } else {
+    viewError = res.error?.message || 'Failed to connect to platforms API.';
+    const container = document.getElementById('view-container');
+    if (container) render(container, store);
+  }
 }
 
 export function onDeactivate() {
-  
+  platformDelegatesAbort?.abort();
+  platformDelegatesAbort = null;
   if (unsubscribe) unsubscribe();
+  platformsSigLast = '';
 }

@@ -149,7 +149,7 @@ code, pre, .mono {
 .badge--ghost   { background-color: var(--bg-raised); color: var(--text-secondary); border: 1px solid var(--border-subtle); }
 
 /* 4. Form Controls (Themed & Zero White Artifacts) */
-.input {
+.input, .form-input {
   width: 100%;
   padding: 0.625rem 0.875rem;
   background-color: var(--bg-surface);
@@ -161,7 +161,7 @@ code, pre, .mono {
   box-shadow: var(--shadow-inset);
 }
 
-.input:focus {
+.input:focus, .form-input:focus {
   outline: none;
   border-color: var(--brand-primary);
   box-shadow: var(--focus-ring), var(--shadow-inset);
@@ -184,7 +184,7 @@ code, pre, .mono {
   box-shadow: var(--focus-ring);
 }
 
-.input::placeholder, .textarea::placeholder {
+.input::placeholder, .textarea::placeholder, .form-input::placeholder {
   color: var(--text-muted);
 }
 
@@ -234,6 +234,15 @@ input[type="checkbox"]:focus {
   background-position: right var(--space-2) center;
   background-size: 1.25rem;
   padding-right: var(--space-8);
+  background-color: var(--control-bg);
+  color: var(--text-primary);
+  border: 1px solid var(--control-border);
+  border-radius: var(--radius-sm);
+}
+
+select option {
+  background-color: var(--bg-surface);
+  color: var(--text-primary);
 }
 
 /* 5. Utility Classes (The Missing Foundation) */
@@ -444,6 +453,12 @@ input[type="checkbox"]:focus {
 
 .text-truncate-wide {
   max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.truncate {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;

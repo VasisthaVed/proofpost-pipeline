@@ -169,6 +169,19 @@ pp-platform-card {
   opacity: 0.7;
 }
 
+.platform-details {
+  min-height: 40px;
+}
+
+.platform-details .mono {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 .platform-icon {
   font-size: 24px;
   width: 48px;

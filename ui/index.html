@@ -36,11 +36,15 @@
         </button>
         <div class="topbar__logo">
           <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="logo-icon"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-          <span class="logo-text">ProofPost <span class="badge badge--info ml-2 version-badge">V1.1</span></span>
+          <span class="logo-text">ProofPost <span class="badge badge--info ml-2 version-badge">V1.1.1</span></span>
         </div>
       </div>
       <div class="topbar__actions">
         <div class="flex items-center gap-4">
+          <div class="flex items-center gap-2 px-3 py-1 bg-raised rounded-full border border-subtle" title="Currently Active AI Extraction Provider">
+            <span class="text-xs">🧠</span>
+            <span class="text-xs font-semibold mono text-brand uppercase" id="global-ai-status-text">AI: MOCK</span>
+          </div>
           <div class="flex items-center gap-2 px-3 py-1 bg-raised rounded-full border border-subtle">
             <pp-status-dot id="global-status-dot" status="offline"></pp-status-dot>
             <span class="text-xs font-semibold mono" id="global-status-text">DISCONNECTED</span>
@@ -74,6 +78,10 @@
         <a href="/platforms" class="nav-item" data-route="/platforms">
           <span class="nav-item__icon">🌐</span>
           <span class="nav-item__label">Platforms</span>
+        </a>
+        <a href="/ai" class="nav-item" data-route="/ai">
+          <span class="nav-item__icon">🧠</span>
+          <span class="nav-item__label">AI Orchestration</span>
         </a>
         <div class="sidebar__nav-group">
           <a href="/settings" class="nav-item" data-route="/settings">

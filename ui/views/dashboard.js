@@ -11,6 +11,22 @@ let pollInterval = null;
 let isLoading = false;
 let viewError = null;
 let unsubscribe = null;
+let dashSigLast = '';
+let onConfigChangedHandler = null;
+
+function dashboardRenderSignature(state) {
+  if (state.app.route !== '/dashboard') return null;
+  return JSON.stringify({
+    api_online: state.app.api_online,
+    last_health_check: state.app.last_health_check,
+    pendingFacts: state.workspace.facts.length,
+    platforms: state.platforms.items,
+    historyLen: state.history.items.length,
+    dry_run: state.settings.dry_run,
+    dev_mode: state.settings.dev_mode,
+    viewError
+  });
+}
 
 /**
  * Render the dashboard view
@@ -19,7 +35,7 @@ let unsubscribe = null;
  */
 export function render(container, state) {
   const pendingCount = state.workspace.facts.length;
-  const health = state.app.apiOnline ? 'Operational' : 'Disconnected';
+  const health = state.app.api_online ? 'Operational' : 'Disconnected';
   const historyCount = state.history.items.length;
 
   container.innerHTML = `
@@ -53,12 +69,14 @@ export function render(container, state) {
             <div>
               <span class="label">System Health</span>
               <div class="flex items-center gap-2 mt-2">
-                <pp-status-dot status="${state.app.apiOnline ? 'online' : 'offline'}"></pp-status-dot>
+                <pp-status-dot status="${state.app.api_online ? 'online' : 'offline'}"></pp-status-dot>
                 <h2 class="m-0">${escapeHtml(health)}</h2>
               </div>
             </div>
             <div class="mt-4 text-xs text-muted">
-              Last heartbeat: ${new Date().toLocaleTimeString()}
+              Last heartbeat: ${state.app.last_health_check
+    ? new Date(state.app.last_health_check).toLocaleTimeString()
+    : '—'}
             </div>
           </div>
 
@@ -128,11 +146,11 @@ export function render(container, state) {
                 </div>
                 <div>
                   <span class="label">Environment</span>
-                  <div class="badge badge--info">${state.settings.devMode ? 'Development' : 'Production'}</div>
+                  <div class="badge badge--info">${state.settings.dev_mode ? 'Development' : 'Production'}</div>
                 </div>
                 <div>
                   <span class="label">Safety Gate</span>
-                  <div class="badge badge--${state.settings.dryRun ? 'warning' : 'success'}">${state.settings.dryRun ? 'Dry Run Active' : 'Live Publishing'}</div>
+                  <div class="badge badge--${state.settings.dry_run ? 'warning' : 'success'}">${state.settings.dry_run ? 'Dry Run Active' : 'Live Publishing'}</div>
                 </div>
               </div>
             </div>
@@ -176,7 +194,7 @@ function renderPlatformStatus(container, state) {
         <span class="text-lg">${p.id === 'linkedin' ? '🔗' : '🦋'}</span>
         <div>
           <div class="font-semibold text-sm">${escapeHtml(p.name)}</div>
-          <div class="text-xs text-muted">${escapeHtml(p.handle || 'Not connected')}</div>
+          <div class="text-xs text-muted truncate" style="max-width: 150px;">${escapeHtml(p.handle || 'Not connected')}</div>
         </div>
       </div>
       <pp-status-dot status="${p.connected ? 'online' : 'offline'}"></pp-status-dot>
@@ -191,17 +209,28 @@ export async function onActivate() {
   isLoading = true;
   const container = document.getElementById('view-container');
   
+  dashSigLast = '';
   unsubscribe = subscribe((state) => {
-    const container = document.getElementById('view-container');
-    if (container && state.app.route === '/dashboard') {
-      render(container, state);
-    }
+    const el = document.getElementById('view-container');
+    if (!el || state.app.route !== '/dashboard') return;
+    const sig = dashboardRenderSignature(state);
+    if (sig == null) return;
+    if (sig === dashSigLast) return;
+    dashSigLast = sig;
+    render(el, state);
   });
+
+  onConfigChangedHandler = () => {
+    if (store.app.route === '/dashboard') refreshData();
+  };
+  window.addEventListener('pp-config-changed', onConfigChangedHandler);
 
   if (container) render(container, store);
 
-  // Initial fetch
-  await refreshData();
+  // Initial fetch - skip if already hydrated by app boot
+  if (!store.app.server_hydrated) {
+    await refreshData();
+  }
   isLoading = false;
   
   // Start polling every 15s
@@ -221,6 +250,11 @@ export function onDeactivate() {
     clearInterval(pollInterval);
     pollInterval = null;
   }
+
+  if (onConfigChangedHandler) {
+    window.removeEventListener('pp-config-changed', onConfigChangedHandler);
+    onConfigChangedHandler = null;
+  }
 }
 
 /**
@@ -230,17 +264,20 @@ async function refreshData() {
   viewError = null;
   const container = document.getElementById('view-container');
   try {
-  const healthRes = await api.getHealth();
-  if (healthRes.success) {
-    actions.updateHealth(healthRes.data);
-  } else {
-    actions.updateHealth({ online: false });
-  }
-
-  const factsRes = await api.getPendingFacts();
-  if (factsRes.success) {
+    const factsRes = await api.getPendingFacts();
+    if (factsRes.success) {
       actions.setPendingFacts(factsRes.data.items || []);
-  }
+    }
+
+    const platformsRes = await api.getPlatforms();
+    if (platformsRes.success) {
+      actions.setPlatforms(platformsRes.data.platforms || []);
+    }
+
+    const historyRes = await api.getHistory();
+    if (historyRes.success) {
+      actions.setHistoryItems(historyRes.data.items || []);
+    }
   } catch (err) {
     viewError = err.message;
     if (container) render(container, store);

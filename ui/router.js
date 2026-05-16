@@ -1,7 +1,7 @@
 /**
  * ProofPost V1.1 — Router
  * ui/router.js
- * 
+ *
  * Vanilla History API router with view lifecycle management and onboarding guards.
  */
 
@@ -16,7 +16,8 @@ export const ROUTES = {
   HISTORY: '/history',
   PLATFORMS: '/platforms',
   SETTINGS: '/settings',
-  DOCS: '/docs'
+  DOCS: '/docs',
+  AI: '/ai'
 };
 
 const routeMap = {
@@ -27,138 +28,145 @@ const routeMap = {
   [ROUTES.HISTORY]: 'history',
   [ROUTES.PLATFORMS]: 'platforms',
   [ROUTES.SETTINGS]: 'settings',
-  [ROUTES.DOCS]: 'docs'
+  [ROUTES.DOCS]: 'docs',
+  [ROUTES.AI]: 'ai'
 };
 
 let currentViewModule = null;
+/** Navigation target when resolving draft modal or string/object detail. */
+let pendingNav = { path: ROUTES.DASHBOARD, settingsTab: undefined };
+
+function normalizeNavDetail(detail) {
+  if (typeof detail === 'string') {
+    return { path: detail, settingsTab: undefined };
+  }
+  if (detail && typeof detail === 'object') {
+    const path = detail.path || ROUTES.DASHBOARD;
+    const settingsTab = detail.settingsTab || undefined;
+    return { path, settingsTab };
+  }
+  return { path: ROUTES.DASHBOARD, settingsTab: undefined };
+}
 
 /**
- * Navigate to a new path
- * @param {string} path 
+ * Navigate to a new path (string) or { path, settingsTab? } for Settings deep-link.
+ * @param {string|{ path: string, settingsTab?: string }} detail
  */
-export async function navigate(path) {
-  // 1. Root redirect
+export async function navigate(detail) {
+  pendingNav = normalizeNavDetail(detail);
+  let path = pendingNav.path;
+
   if (path === '/' || path === '') {
-    return navigate(ROUTES.DASHBOARD);
+    path = ROUTES.DASHBOARD;
+    pendingNav = { ...pendingNav, path };
   }
 
-  // 1.1 Unsaved Draft Check
   if (isDraftDirty()) {
     actions.setModal({
       title: 'Unsaved Changes',
       body: 'You have unsaved edits in your workspace. Navigating away will discard these changes. Proceed anyway?',
       confirmLabel: 'Discard & Proceed',
       onConfirm: () => {
-        // Clear dirty state is implicit because we won't be on the workspace anymore
-        // or the specific fact will be different.
-        // For now, we just proceed with navigation.
         actions.closeModal();
-        performNavigation(path);
+        performNavigation(pendingNav.path, { settingsTab: pendingNav.settingsTab });
       }
     });
     return;
   }
 
-  performNavigation(path);
+  await performNavigation(pendingNav.path, { settingsTab: pendingNav.settingsTab });
 }
 
 /**
  * Internal navigation execution
- * @param {string} path 
+ * @param {string} path
+ * @param {{ settingsTab?: string }} [navOptions]
  */
-async function performNavigation(path) {
-  // 2. Run Route Guards
+async function performNavigation(path, navOptions = {}) {
   const guardedPath = runGuards(path);
   if (guardedPath !== path) {
-    return navigate(guardedPath);
+    await navigate(guardedPath);
+    return;
   }
 
-  // 3. Lifecycle: onDeactivate current view
+  const oldPath = store.app.route;
+  actions.setScrollPosition(oldPath, window.scrollY);
+
   if (currentViewModule?.onDeactivate) {
     currentViewModule.onDeactivate();
   }
 
-  // 4. Update History
   if (window.location.pathname !== path) {
     window.history.pushState({}, '', path);
   }
 
-  // 5. Update State
   const viewName = routeMap[path] || 'dashboard';
   actions.setRoute(path);
 
-  // 6. Update Browser UI
-  window.scrollTo(0, 0);
+  if (navOptions.settingsTab) {
+    actions.setSettingsTab(navOptions.settingsTab);
+  }
+
   updateTitle(viewName);
 
-  // 7. Load and Initialize View
   try {
-    currentViewModule = await import(`./views/${viewName}.js`);
-    
+    currentViewModule = await import(`./views/${viewName}.js?v=${Date.now()}`);
+
     const container = document.getElementById('view-container');
     if (container) {
-      // Trigger View Transition Animation
       container.classList.remove('view-fade-in');
-      void container.offsetWidth; // Force reflow
+      void container.offsetWidth;
       container.classList.add('view-fade-in');
-      
-      // Clear container before render
+
       container.innerHTML = '';
-      
-      // Render
+
       currentViewModule.render(container, store);
-      
-      // 8. Focus Management: Focus primary heading
+
       const h1 = container.querySelector('h1');
       if (h1) {
         h1.setAttribute('tabindex', '-1');
         h1.focus();
       }
-      
-      // Lifecycle: onActivate new view
+
       if (currentViewModule.onActivate) {
-        currentViewModule.onActivate();
+        await currentViewModule.onActivate();
+      }
+
+      const cachedScroll = store.ui.scrollCache[path];
+      if (cachedScroll !== undefined) {
+        window.scrollTo(0, cachedScroll);
+      } else {
+        window.scrollTo(0, 0);
       }
     }
   } catch (err) {
     console.error(`Failed to load view: ${viewName}`, err);
-    // Fallback to dashboard or error view
-    if (path !== ROUTES.DASHBOARD) navigate(ROUTES.DASHBOARD);
+    if (path !== ROUTES.DASHBOARD) await navigate(ROUTES.DASHBOARD);
   }
 }
 
-/**
- * Run route guards (Onboarding guard)
- * @param {string} path 
- * @returns {string} The allowed path
- */
 function runGuards(path) {
-  const isPublic = [ROUTES.SETUP, ROUTES.DOCS, ROUTES.SETTINGS].includes(path);
-  
-  if (!store.app.setupComplete && !isPublic) {
+  const isPublic = [ROUTES.SETUP, ROUTES.DOCS, ROUTES.SETTINGS, ROUTES.AI].includes(path);
+
+  if (!store.app.setup_complete && !isPublic) {
     console.warn('Onboarding incomplete. Redirecting to /setup.');
     return ROUTES.SETUP;
   }
-  
+
   return path;
 }
 
-/**
- * Check if the current workspace draft is dirty
- */
 function isDraftDirty() {
   if (store.app.route !== ROUTES.WORKSPACE) return false;
-  
-  const platform = store.workspace.selectedPlatform;
-  const current = store.workspace.draftContent[platform];
+
   const original = store.workspace.originalContent;
-  
-  return current !== original;
+  const drafts = store.workspace.draftContent;
+
+  // Check if any platform has a draft that differs from the original fact summary
+  // and is not just an empty string (unless the original was also empty)
+  return Object.values(drafts).some(draft => draft && draft !== original);
 }
 
-/**
- * Browser-level navigation protection
- */
 window.onbeforeunload = (e) => {
   if (isDraftDirty()) {
     e.preventDefault();
@@ -166,16 +174,13 @@ window.onbeforeunload = (e) => {
   }
 };
 
-/**
- * Handle browser back/forward buttons
- */
 window.addEventListener('popstate', () => {
   navigate(window.location.pathname);
 });
 
 /**
- * Initial boot navigation
+ * Initial boot navigation (await after server hydration).
  */
-export function initRouter() {
-  navigate(window.location.pathname);
+export async function initRouter() {
+  await navigate(window.location.pathname);
 }

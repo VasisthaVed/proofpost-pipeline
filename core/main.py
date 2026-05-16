@@ -12,7 +12,7 @@ from typing import List, Optional, Dict, Any
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -34,13 +34,46 @@ from schemas.responses import (
     ActionResponse, HistoryResponse, HistoryItem,
     PlatformsResponse, PlatformStatus, TestPlatformResponse,
     SettingsResponse, IngestionSettingsResponse, PlatformSettingsResponse,
-    EventsResponse, PipelineEvent, PreviewResponse, TestAIRequest, TestAIResponse
+    EventsResponse, PipelineEvent, PreviewResponse, TestAIRequest, TestAIResponse,
+    WebhookResponse, AIProviderConfigResponse, AIProvidersListResponse,
+    AIProvidersSaveRequest, AIProvidersSaveResponse, AIProviderReorderRequest,
+    AIProviderModelsResponse, NgrokStatusResponse, AIStatusResponse
 )
 from pydantic import BaseModel
 import json
 from datetime import datetime, timezone
+from pathlib import Path
 
 logger = structlog.get_logger()
+
+
+def _coerce_ai_model_for_provider(provider: str, model: Optional[str]) -> str:
+    """Return a model ID consistent with the selected AI provider (fixes invalid persisted pairs)."""
+    defaults = {
+        "gemini": "gemini-2.0-flash-exp",
+        "groq": "llama3-8b-8192",
+        "nvidia": "meta/llama-3.3-70b-instruct",
+        "openrouter": "openrouter/auto",
+        "mock": "mock"
+    }
+    pl = (provider or "mock").strip().lower()
+    m = (model or "").strip()
+    if pl == "groq":
+        if not m or "gemini" in m.lower():
+            return defaults["groq"]
+        return m
+    if pl == "gemini":
+        if not m or ("llama" in m.lower() and "gemini" not in m.lower()):
+            return defaults["gemini"]
+        return m
+    if pl == "nvidia":
+        return m or defaults["nvidia"]
+    if pl == "openrouter":
+        return m or defaults["openrouter"]
+    if pl == "mock":
+        return m or defaults["mock"]
+    return defaults.get("mock", "mock")
+
 
 class ApprovalRequest(BaseModel):
     """Request body for fact approval, allowing optional content overrides."""
@@ -74,15 +107,18 @@ PLATFORM_PROMPTS = {
 def plain_english_error(e: Exception) -> str:
     """Converts technical exceptions into human-readable strings."""
     msg = str(e).lower()
+    e_type = e.__class__.__name__.lower()
+    if "timeout" in msg or "timeout" in e_type:
+        return "Connection timed out (provider API is slow or unreachable). Try again later."
+    if "connect" in e_type:
+        return "Network connection failed. Check your internet or firewall settings."
     if "401" in msg or "unauthorized" in msg or "invalid" in msg:
         return "Invalid API key. Check your provider dashboard."
     if "429" in msg or "quota" in msg or "exhausted" in msg:
         return "API quota exceeded. Try again later or switch providers."
     if "404" in msg or "not found" in msg:
         return "Model not found. Check the model name is correct."
-    if "timeout" in msg:
-        return "Connection timed out. Check your internet connection."
-    return "Connection failed. Check your API key and try again."
+    return f"Connection failed ({e.__class__.__name__}). Check your API key and try again."
 
 async def generate_with_provider(provider: Any, prompt: str) -> str:
     """Helper to call generate_content on any provider, handling different SDK shapes."""
@@ -105,7 +141,46 @@ async def generate_with_provider(provider: Any, prompt: str) -> str:
         )
         return response.choices[0].message.content or ""
 
-    # 3. Mock or Fallback
+    # 3. NVIDIA NIM / OpenRouter (urllib.request)
+    if provider.__class__.__name__ in ("NvidiaProvider", "OpenRouterProvider"):
+        import urllib.request
+        import urllib.error
+        import json
+        import asyncio
+        headers = {
+            "Authorization": f"Bearer {provider.api_key}",
+            "Content-Type": "application/json"
+        }
+        if provider.__class__.__name__ == "OpenRouterProvider":
+            headers.update({
+                "HTTP-Referer": "https://github.com/VasisthaVed/proofpost-pipeline",
+                "X-Title": "ProofPost"
+            })
+        payload = json.dumps({
+            "model": provider.model_name,
+            "messages": [{"role": "user", "content": prompt}]
+        }).encode("utf-8")
+
+        def _post():
+            req = urllib.request.Request(provider.base_url, headers=headers, data=payload)
+            try:
+                with urllib.request.urlopen(req, timeout=15.0) as res:
+                    return res.getcode(), res.read().decode("utf-8")
+            except urllib.error.HTTPError as e:
+                return e.getcode(), e.read().decode("utf-8")
+
+        try:
+            status_code, body_text = await asyncio.to_thread(_post)
+            if status_code != 200:
+                logger.error("generate_with_provider.http_error", status_code=status_code, text=body_text)
+                raise Exception(f"HTTP {status_code}: {body_text}")
+            data = json.loads(body_text)
+            return data.get("choices", [{}])[0].get("message", {}).get("content") or ""
+        except Exception as e:
+            logger.warning("generate_with_provider.api_failed", error=repr(e))
+            raise e
+
+    # 4. Mock or Fallback
     if provider.__class__.__name__ == "MockLLMProvider":
         return f"Mock Response for: {prompt[:20]}..."
         
@@ -124,6 +199,31 @@ class TraceIDMiddleware(BaseHTTPMiddleware):
         response.headers["X-Trace-ID"] = trace_id
         return response
 
+
+class CSRFProtectionMiddleware(BaseHTTPMiddleware):
+    """Middleware to protect modifying API endpoints against Cross-Site Request Forgery (CSRF)."""
+    async def dispatch(self, request: Request, call_next):
+        # Bypass CSRF check for Starlette TestClient in automated tests
+        if request.headers.get("user-agent") == "testclient":
+            return await call_next(request)
+
+        if request.method in ("POST", "PUT", "DELETE", "PATCH") and request.url.path.startswith("/api/"):
+            origin = request.headers.get("origin")
+            referer = request.headers.get("referer")
+            host = request.headers.get("host", "")
+            
+            def is_same_origin(val: Optional[str]) -> bool:
+                if not val:
+                    return False
+                clean = val.replace("https://", "").replace("http://", "").split("/")[0]
+                return clean == host
+
+            if not is_same_origin(origin) and not is_same_origin(referer):
+                logger.warning("csrf.rejected", origin=origin, referer=referer, host=host)
+                raise HTTPException(status_code=403, detail="CSRF verification failed: Invalid Origin/Referer")
+                
+        return await call_next(request)
+
 # --- Lifespan ---
 
 class AppState:
@@ -137,6 +237,39 @@ class AppState:
         self.dispatch_task: asyncio.Task = None
 
 state = AppState()
+
+
+def settings_json_path() -> Path:
+    """Canonical on-disk settings path (same as save_settings)."""
+    return Path(__file__).parent.parent / "settings.json"
+
+
+def apply_settings_runtime_reload(settings_path: str) -> None:
+    """Reload settings from disk and rebuild dispatcher adapters + AI extractor."""
+    state.settings = load_config(settings_path)
+    new_adapters: List[PlatformAdapter] = []
+    s = state.settings.platforms
+    if s.linkedin.enabled and s.linkedin.access_token:
+        new_adapters.append(
+            LinkedInAdapter(
+                access_token=s.linkedin.access_token,
+                author_urn="urn:li:person:me",
+            )
+        )
+    if s.bluesky.enabled and s.bluesky.handle and s.bluesky.app_password:
+        from platforms.bluesky import BlueskyAdapter
+
+        new_adapters.append(
+            BlueskyAdapter(
+                handle=s.bluesky.handle,
+                app_password=s.bluesky.app_password,
+            )
+        )
+    state.dispatcher.adapters = new_adapters
+    state.dispatcher.dry_run = state.settings.dry_run
+    provider = create_provider(state.settings)
+    state.extractor = Extractor(provider)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -181,6 +314,39 @@ async def lifespan(app: FastAPI):
     provider = create_provider(state.settings)
     state.extractor = Extractor(provider)
     
+    # 7. Resume Interrupted Ingestions (Pre-Extraction)
+    try:
+        pending_ingestions = await state.db.get_pre_extraction_items()
+        if pending_ingestions:
+            logger.info("lifespan.resuming_ingestions", count=len(pending_ingestions))
+            for trace_id, clean_payload in pending_ingestions:
+                async def resume_ingestion(tid: str, p: dict):
+                    try:
+                        extracted = await state.extractor.extract(p)
+                        verified = [verify_fact(fact, p, trace_id=tid) for fact in extracted]
+                        final = filter_verified(verified, trace_id=tid)
+                        phash = compute_hash(p)
+                        if not await state.db.is_duplicate(phash):
+                            await state.db.persist_pipeline_result(final, phash)
+                        await state.db.complete_ingestion(tid)
+                        await state.db.log_event(
+                            session_id=tid,
+                            event_type="ingestion_resumed",
+                            status="success",
+                            detail=f"Successfully resumed and queued {len(final)} facts"
+                        )
+                    except Exception as err:
+                        logger.error("lifespan.resume_ingestion_failed", trace_id=tid, error=str(err))
+                        await state.db.log_event(
+                            session_id=tid,
+                            event_type="ingestion_resumed",
+                            status="failed",
+                            detail=f"Failed to resume extraction: {err}"
+                        )
+                asyncio.create_task(resume_ingestion(trace_id, clean_payload))
+    except Exception as e:
+        logger.error("lifespan.resume_ingestions_failed", error=str(e))
+    
     logger.info("app.startup_complete")
     
     yield
@@ -221,12 +387,14 @@ app.add_middleware(
 )
 
 app.add_middleware(TraceIDMiddleware)
+app.add_middleware(CSRFProtectionMiddleware)
 
 # --- Static Files ---
 import os
 app.mount("/styles", StaticFiles(directory="ui/styles"), name="styles")
 app.mount("/components", StaticFiles(directory="ui/components"), name="components")
 app.mount("/views", StaticFiles(directory="ui/views"), name="views")
+app.mount("/services", StaticFiles(directory="ui/services"), name="services")
 if os.path.exists("ui/assets"):
     app.mount("/assets", StaticFiles(directory="ui/assets"), name="assets")
 
@@ -241,16 +409,17 @@ if os.path.exists("ui/assets"):
 @app.get("/history")
 @app.get("/docs")
 @app.get("/setup")
+@app.get("/ai")
 async def serve_ui():
     """Serves the main dashboard UI."""
-    return FileResponse("ui/index.html")
+    return FileResponse("ui/index.html", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
 
 @app.get("/{filename}.js")
 async def serve_js(filename: str):
     """Serves root-level JS files."""
-    valid_files = ["app", "api", "router", "store", "utils"]
+    valid_files = ["app", "api", "router", "store", "utils", "ai-defaults"]
     if filename in valid_files:
-        return FileResponse(f"ui/{filename}.js")
+        return FileResponse(f"ui/{filename}.js", headers={"Cache-Control": "no-cache, no-store, must-revalidate"})
     raise HTTPException(status_code=404, detail="Not Found")
 
 @app.get("/health", response_model=HealthResponse)
@@ -320,18 +489,18 @@ async def approve_fact(fact_id: str, request: Optional[ApprovalRequest] = None):
         logger.info("approve_fact.summary_override", fact_id=fact_id, old_summary=fact.summary, new_summary=request.summary)
         fact.summary = request.summary
 
-    # 3. Atomic Status Transition
-    # Prevent duplicate approval dispatch
-    # We atomically move from 'pending' to 'approved'. If this fails, it means
+    # 3. Apply overrides to payload
+    fact.approved = True
+    fact.approved_at = datetime.now(timezone.utc)
+
+    # 4. Atomic Status Transition and Payload Update
+    # Prevent duplicate approval dispatch. If this fails, it means
     # the fact was already approved or is being dispatched.
-    if not await state.db.transition_fact_status(fact_id, ["pending"], "approved"):
+    if not await state.db.transition_and_update_fact(fact_id, ["pending"], "approved", fact.model_dump_json()):
         logger.warning("approve_fact.ignored", fact_id=fact_id, current_status=current_status)
         return {"status": "ignored", "message": f"Fact already in status: {current_status}", "id": fact_id}
 
-    # 4. Persist overrides and Signal Dispatcher
-    fact.approved = True
-    fact.approved_at = datetime.now(timezone.utc)
-    await state.db.update_fact_payload(fact_id, fact.model_dump_json())
+    # 5. Signal Dispatcher
     await state.bus.enqueue(fact, trace_id)
     
     await state.db.log_event(
@@ -370,18 +539,22 @@ async def get_platforms():
     """Returns the status of all configured platform adapters."""
     # Mapping settings to platform IDs for monitoring
     s = state.settings.platforms
+    li_connected = bool(s.linkedin.enabled and s.linkedin.access_token)
+    bsky_connected = bool(s.bluesky.enabled and s.bluesky.handle and s.bluesky.app_password)
     platforms = [
         PlatformStatus(
-            id="linkedin", 
-            name="LinkedIn", 
-            connected=bool(s.linkedin.enabled and s.linkedin.access_token),
+            id="linkedin",
+            name="LinkedIn",
+            connected=li_connected,
+            handle="LinkedIn" if li_connected else None,
             last_tested=None,
             last_error=None
         ),
         PlatformStatus(
-            id="bluesky", 
-            name="Bluesky", 
-            connected=bool(s.bluesky.enabled and s.bluesky.handle and s.bluesky.app_password),
+            id="bluesky",
+            name="Bluesky",
+            connected=bsky_connected,
+            handle=(s.bluesky.handle or None) if bsky_connected else None,
             last_tested=None,
             last_error=None
         )
@@ -391,15 +564,19 @@ async def get_platforms():
 @app.post("/api/platforms/{platform_id}/test", response_model=TestPlatformResponse)
 async def test_platform(platform_id: str):
     """Triggers a connection test for a specific platform adapter."""
-    # Find adapter in state.dispatcher.adapters
-    # For now, we only have one adapter in the list
     adapter = None
     if platform_id == "linkedin":
         for a in state.dispatcher.adapters:
             if isinstance(a, LinkedInAdapter):
                 adapter = a
                 break
-    
+    elif platform_id == "bluesky":
+        from platforms.bluesky import BlueskyAdapter
+        for a in state.dispatcher.adapters:
+            if isinstance(a, BlueskyAdapter):
+                adapter = a
+                break
+
     if not adapter:
         return {
             "status": "error",
@@ -427,7 +604,8 @@ async def get_settings():
     s = state.settings
     
     def mask(val: Optional[str]) -> str:
-        if not val: return ""
+        if not val or not str(val).strip():
+            return ""
         return "****"
 
     return {
@@ -438,7 +616,19 @@ async def get_settings():
         "ai": {
             "provider": s.ai.provider,
             "api_key": mask(s.ai.api_key),
-            "model": s.ai.model
+            "model": s.ai.model,
+            "providers": [
+                {
+                    "id": p.id,
+                    "provider": p.provider,
+                    "model": p.model,
+                    "api_key": mask(p.api_key),
+                    "enabled": p.enabled,
+                    "priority": p.priority,
+                    "fallback_enabled": p.fallback_enabled
+                }
+                for p in s.ai.providers
+            ] if hasattr(s.ai, "providers") else []
         },
         "platforms": {
             "bluesky": {
@@ -451,105 +641,55 @@ async def get_settings():
                 "access_token": mask(s.platforms.linkedin.access_token)
             }
         },
+        "ui": {
+            "onboarding_complete": s.ui.onboarding_complete
+        },
         "dev_mode": s.dev_mode,
         "dry_run": s.dry_run
     }
 
+
+@app.get("/api/settings/file")
+async def get_settings_file_raw():
+    """Return verbatim settings.json for in-browser editing (local operator; keep file secure)."""
+    path = settings_json_path()
+    if not path.is_file():
+        return Response(content="{}", media_type="application/json; charset=utf-8")
+    return Response(
+        content=path.read_text(encoding="utf-8"),
+        media_type="application/json; charset=utf-8",
+    )
+
+
+@app.post("/api/settings/file", response_model=ActionResponse)
+async def post_settings_file_raw(request: Request):
+    """Replace settings.json after validation; reloads adapters and AI extractor."""
+    body_text = (await request.body()).decode("utf-8")
+    try:
+        data = json.loads(body_text)
+    except json.JSONDecodeError as e:
+        raise HTTPException(status_code=400, detail=f"Invalid JSON: {e}")
+    from core.services.settings import merge_all_settings
+    data = merge_all_settings(data, state.settings)
+    try:
+        updated = Settings(**data)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    path = settings_json_path()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(updated.model_dump(mode="json"), f, indent=2)
+    apply_settings_runtime_reload(str(path))
+    return ActionResponse(status="saved", message="settings.json written and runtime reloaded")
+
+
 @app.post("/api/settings", response_model=ActionResponse)
 async def save_settings(payload: Dict[str, Any]):
     """Saves updated settings and dynamically re-initializes platform adapters."""
-    try:
-        # 1. Handle masked values and merge with current state
-        def unmask(new_val, old_val):
-            if new_val == "****":
-                return old_val
-            return new_val or ""
-
-        # Ingestion
-        if "ingestion" in payload:
-            if "hmac_secret" in payload["ingestion"]:
-                payload["ingestion"]["hmac_secret"] = unmask(
-                    payload["ingestion"]["hmac_secret"], 
-                    state.settings.ingestion.hmac_secret
-                )
-            # Preserve max_payload_size if not sent
-            if "max_payload_size" not in payload["ingestion"]:
-                payload["ingestion"]["max_payload_size"] = state.settings.ingestion.max_payload_size
-        else:
-            payload["ingestion"] = state.settings.ingestion.model_dump()
-
-        # AI
-        if "ai" in payload:
-            if "api_key" in payload["ai"]:
-                payload["ai"]["api_key"] = unmask(
-                    payload["ai"]["api_key"], 
-                    state.settings.ai.api_key
-                )
-        else:
-            payload["ai"] = state.settings.ai.model_dump()
-
-        # Platforms
-        if "platforms" in payload:
-            p = payload["platforms"]
-            # Bluesky
-            if "bluesky" in p:
-                b = p["bluesky"]
-                if "app_password" in b:
-                    b["app_password"] = unmask(
-                        b.get("app_password"), 
-                        state.settings.platforms.bluesky.app_password
-                    )
-            # LinkedIn
-            if "linkedin" in p:
-                l = p["linkedin"]
-                if "access_token" in l:
-                    l["access_token"] = unmask(
-                        l.get("access_token"), 
-                        state.settings.platforms.linkedin.access_token
-                    )
-        else:
-            payload["platforms"] = state.settings.platforms.model_dump()
-
-        # Database (Always preserve)
-        payload["database"] = state.settings.database.model_dump()
-
-        # 2. Update live state and persist
-        updated_settings = Settings(**payload)
-        
-        from pathlib import Path
-        settings_path = Path(__file__).parent.parent / "settings.json"
-        with open(settings_path, "w") as f:
-            json.dump(updated_settings.model_dump(mode='json'), f, indent=2)
-            
-        # 3. Reload from file to ensure consistency
-        state.settings = load_config(str(settings_path))
-            
-        # 4. Dynamic Re-initialization
-        new_adapters: List[PlatformAdapter] = []
-        s = state.settings.platforms
-        
-        if s.linkedin.enabled and s.linkedin.access_token:
-            linkedin = LinkedInAdapter(
-                access_token=s.linkedin.access_token,
-                author_urn="urn:li:person:me"
-            )
-            new_adapters.append(linkedin)
-            
-        if s.bluesky.enabled and s.bluesky.handle and s.bluesky.app_password:
-            from platforms.bluesky import BlueskyAdapter
-            new_adapters.append(BlueskyAdapter(
-                handle=s.bluesky.handle,
-                app_password=s.bluesky.app_password
-            ))
-        
-        state.dispatcher.adapters = new_adapters
-        state.dispatcher.dry_run = state.settings.dry_run
-        
-        logger.info("settings.saved_successfully", adapter_count=len(new_adapters))
-        return {"status": "saved", "message": "Settings saved and reloaded"}
-    except Exception as e:
-        logger.error("settings.save_failed", error=str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+    from core.services.settings import update_settings_service
+    path = settings_json_path()
+    res = await update_settings_service(payload, state.settings, path)
+    apply_settings_runtime_reload(str(path))
+    return res
 
 @app.get("/api/events", response_model=EventsResponse)
 async def get_events(limit: int = 100):
@@ -595,129 +735,214 @@ async def get_fact_preview(fact_id: str, platform: str = "bluesky"):
 @app.post("/api/settings/test-ai", response_model=TestAIResponse)
 async def test_ai_connection(request: TestAIRequest):
     """Test AI provider credentials with a real API call."""
-    import time
-    start = time.time()
+    from core.services.ai_testing import test_ai_connection_service
+    return await test_ai_connection_service(request, state.settings)
+
+@app.get("/api/ai/providers", response_model=AIProvidersListResponse)
+async def get_ai_providers():
+    """Returns the list of configured AI providers with masked API keys."""
+    s = state.settings
+    def mask(val: Optional[str]) -> str:
+        if not val or not str(val).strip():
+            return ""
+        return "****"
+        
+    providers = []
+    if hasattr(s.ai, "providers") and s.ai.providers:
+        for p in s.ai.providers:
+            providers.append({
+                "id": p.id,
+                "provider": p.provider,
+                "model": p.model,
+                "api_key": mask(p.api_key),
+                "enabled": p.enabled,
+                "priority": p.priority,
+                "fallback_enabled": p.fallback_enabled
+            })
+    return {"providers": providers}
+
+@app.post("/api/ai/providers", response_model=AIProvidersSaveResponse)
+async def save_ai_providers(payload: AIProvidersSaveRequest):
+    """Saves updated AI providers registry, matching masked keys against active memory, and reloads extractor."""
+    from core.services.settings import update_settings_service
+    path = settings_json_path()
+    update_dict = {"ai": {"providers": [p.model_dump() for p in payload.providers]}}
+    await update_settings_service(update_dict, state.settings, path)
+    apply_settings_runtime_reload(str(path))
     
-    # Create temporary settings for the test provider
-    from core.config import AISettings
-    test_ai_settings = AISettings(
+    s = state.settings
+    def mask(val: Optional[str]) -> str:
+        if not val or not str(val).strip():
+            return ""
+        return "****"
+    providers = []
+    if hasattr(s.ai, "providers") and s.ai.providers:
+        for p in s.ai.providers:
+            providers.append({
+                "id": p.id,
+                "provider": p.provider,
+                "model": p.model,
+                "api_key": mask(p.api_key),
+                "enabled": p.enabled,
+                "priority": p.priority,
+                "fallback_enabled": p.fallback_enabled
+            })
+    return {"success": True, "data": {"providers": providers}}
+
+@app.post("/api/ai/providers/test", response_model=TestAIResponse)
+async def test_ai_provider_endpoint(request: AIProviderConfigResponse):
+    """Tests connectivity for a specific provider config."""
+    from core.services.ai_testing import test_ai_connection_service
+    test_req = TestAIRequest(
         provider=request.provider,
         api_key=request.api_key,
         model=request.model
     )
-    
-    # We need a partial Settings object that create_provider expects
-    class TempSettings:
-        def __init__(self, ai):
-            self.ai = ai
-    
-    try:
-        provider = create_provider(TempSettings(ai=test_ai_settings))
-        # minimal test prompt
-        await generate_with_provider(provider, "Reply with 'OK' and nothing else.")
-        
-        latency = int((time.time() - start) * 1000)
-        return {
-            "success": True,
-            "provider": request.provider,
-            "message": "Connected successfully",
-            "model_confirmed": request.model,
-            "latency_ms": latency
-        }
-    except Exception as e:
-        return {
-            "success": False,
-            "provider": request.provider,
-            "message": plain_english_error(e),
-            "model_confirmed": None,
-            "latency_ms": None
-        }
+    return await test_ai_connection_service(test_req, state.settings, config_id=request.id)
 
-@app.post("/webhook/github")
+@app.post("/api/ai/providers/reorder", response_model=AIProvidersSaveResponse)
+async def reorder_ai_providers(payload: AIProviderReorderRequest):
+    """Updates priority order deterministically based on an array of provider IDs."""
+    from core.services.settings import update_settings_service
+    path = settings_json_path()
+    
+    s = state.settings
+    current_map = {p.id: p.model_dump() for p in s.ai.providers} if hasattr(s.ai, "providers") else {}
+    
+    reordered = []
+    for idx, p_id in enumerate(payload.provider_ids, start=1):
+        if p_id in current_map:
+            p_dict = current_map[p_id]
+            p_dict["priority"] = idx
+            reordered.append(p_dict)
+            
+    existing_ids = set(payload.provider_ids)
+    for p_id, p_dict in current_map.items():
+        if p_id not in existing_ids:
+            p_dict["priority"] = len(reordered) + 1
+            reordered.append(p_dict)
+            
+    update_dict = {"ai": {"providers": reordered}}
+    await update_settings_service(update_dict, state.settings, path)
+    apply_settings_runtime_reload(str(path))
+    
+    def mask(val: Optional[str]) -> str:
+        if not val or not str(val).strip():
+            return ""
+        return "****"
+    providers = []
+    if hasattr(state.settings.ai, "providers") and state.settings.ai.providers:
+        for p in state.settings.ai.providers:
+            providers.append({
+                "id": p.id,
+                "provider": p.provider,
+                "model": p.model,
+                "api_key": mask(p.api_key),
+                "enabled": p.enabled,
+                "priority": p.priority,
+                "fallback_enabled": p.fallback_enabled
+            })
+    return {"success": True, "data": {"providers": providers}}
+
+@app.post("/api/ai/providers/models", response_model=AIProviderModelsResponse)
+async def get_ai_provider_models(request: TestAIRequest):
+    """Executes hybrid model discovery: fetches live models from provider, merges with local cache, and returns combined list."""
+    from extraction.provider_factory import ProviderFactory, KNOWN_MODELS, DEFAULT_MODELS
+    from core.config import AIProviderConfig
+    
+    p_type = request.provider.lower().strip()
+    api_key = ProviderFactory._resolve_api_key(p_type, request.api_key or "", config_id=request.model if request.model else "")
+    
+    cfg = AIProviderConfig(
+        id=f"discovery-{p_type}",
+        provider=p_type,
+        model="mock" if p_type == "mock" else "gemini-2.0-flash-exp",
+        api_key=api_key,
+        priority=1
+    )
+    
+    live_models = []
+    try:
+        provider = ProviderFactory.create(cfg)
+        live_models = await provider.get_available_models()
+    except Exception as e:
+        logger.warning("discovery.live_fetch_failed", error=str(e), provider=p_type)
+        
+    known = KNOWN_MODELS.get(p_type, ["mock"])
+    combined = list(known)
+    for m in live_models:
+        if m not in combined:
+            combined.append(m)
+            
+    default_m = DEFAULT_MODELS.get(p_type, "gemini-2.5-pro")
+    return {
+        "provider": p_type,
+        "models": combined,
+        "default_model": default_m
+    }
+
+@app.get("/api/ai/status", response_model=AIStatusResponse)
+async def get_ai_status():
+    """Returns the currently active and working AI provider in the failover chain."""
+    providers = sorted(state.settings.ai.providers, key=lambda x: x.priority) if hasattr(state.settings.ai, "providers") else []
+    enabled_providers = [p for p in providers if p.enabled]
+    
+    working_p = None
+    working_m = None
+    working_id = None
+    failover_chain = []
+    
+    for p in enabled_providers:
+        failover_chain.append(p.provider)
+        if not working_p:
+            if p.provider == "mock" or (p.api_key and p.api_key.strip()):
+                working_p = p.provider
+                working_m = p.model
+                working_id = p.id
+                
+    if not working_p and (state.settings.ai.provider == "mock" or state.settings.ai.api_key):
+        working_p = state.settings.ai.provider
+        working_m = state.settings.ai.model
+        working_id = "legacy-primary"
+        failover_chain.append(working_p)
+        
+    return AIStatusResponse(
+        working_provider=working_p or "None",
+        working_model=working_m or "None",
+        working_id=working_id or "None",
+        total_enabled=len(enabled_providers),
+        failover_chain=failover_chain
+    )
+
+@app.get("/api/ngrok/status", response_model=NgrokStatusResponse)
+async def get_ngrok_status():
+    """Checks local ngrok API (port 4040) to detect active public tunnels."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=2.0) as client:
+            resp = await client.get("http://127.0.0.1:4040/api/tunnels")
+            if resp.status_code == 200:
+                data = resp.json()
+                tunnels = data.get("tunnels", [])
+                public_url = None
+                for t in tunnels:
+                    if t.get("proto") == "https":
+                        public_url = t.get("public_url")
+                        break
+                if not public_url and tunnels:
+                    public_url = tunnels[0].get("public_url")
+                    
+                if public_url:
+                    return NgrokStatusResponse(connected=True, public_url=public_url)
+    except Exception as e:
+        logger.warning("ngrok.check_failed", error=str(e))
+    return NgrokStatusResponse(connected=False, public_url=None)
+
+@app.post("/webhook/github", response_model=WebhookResponse)
 async def github_webhook(request: Request):
     """Ingestion endpoint for GitHub webhooks."""
+    from core.services.ingestion import process_github_webhook
     trace_id = structlog.contextvars.get_contextvars().get("trace_id")
-    
-    # 1. Size Check
     body = await request.body()
-    
-    await state.db.log_event(
-        session_id=trace_id,
-        event_type="webhook_received",
-        status="success",
-        detail=f"Payload {len(body)} bytes"
-    )
-
-    if not check_size(body, max_kb=state.settings.ingestion.max_payload_size // 1024):
-        await state.db.log_event(
-            session_id=trace_id,
-            event_type="size_check",
-            status="failed",
-            detail=f"Payload {len(body)} exceeds limit"
-        )
-        raise HTTPException(status_code=413, detail="Payload too large")
-    
-    # 2. Signature Check
     signature = request.headers.get("X-Hub-Signature-256")
-    if state.settings.dev_mode:
-        logger.info("webhook.dev_mode_skip_hmac")
-    elif not verify_signature(body, signature, state.settings.ingestion.hmac_secret):
-        logger.warning("webhook.invalid_signature")
-        raise HTTPException(status_code=401, detail="Invalid signature")
-    
-    # 3. JSON Parsing
-    try:
-        payload = await request.json()
-    except Exception:
-        raise HTTPException(status_code=400, detail="Invalid JSON")
-    
-    # 4. Deduplication
-    payload_hash = compute_hash(payload)
-    if await is_duplicate(state.db, payload_hash):
-        logger.info("webhook.duplicate_ignored", hash=payload_hash)
-        return {"status": "ignored", "reason": "duplicate"}
-    
-    # 5. Sanitization
-    clean_payload = sanitize_payload(payload)
-    
-    # 6. Extraction (LLM)
-    extracted_facts = await state.extractor.extract(clean_payload)
-    
-    await state.db.log_event(
-        session_id=trace_id,
-        event_type="extraction_complete",
-        status="success" if extracted_facts else "info",
-        detail=f"Extracted {len(extracted_facts)} facts"
-    )
-    
-    # 7. Verification (Deterministic)
-    verified_facts = []
-    for fact in extracted_facts:
-        verified_facts.append(verify_fact(fact, clean_payload, trace_id=trace_id))
-    
-    # 8. Filtering
-    final_facts = filter_verified(verified_facts, trace_id=trace_id)
-    
-    await state.db.log_event(
-        session_id=trace_id,
-        event_type="verification_complete",
-        status="success",
-        detail=f"Verified {len(final_facts)} facts (from {len(extracted_facts)} total)"
-    )
-    
-    # We DO NOT enqueue to EventBus here. Operator must approve via dashboard.
-    await state.db.persist_pipeline_result(final_facts, payload_hash)
-    
-    await state.db.log_event(
-        session_id=trace_id,
-        event_type="persisted_to_db",
-        status="success",
-        detail=f"Queued {len(final_facts)} facts for approval"
-    )
-    
-    return {
-        "status": "accepted", 
-        "facts_extracted": len(extracted_facts),
-        "facts_verified": len(final_facts),
-        "trace_id": trace_id
-    }
+    return await process_github_webhook(body, signature, request, state.settings, state.db, state.extractor, trace_id)

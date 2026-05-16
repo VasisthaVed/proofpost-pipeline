@@ -76,3 +76,7 @@ class MockLLMProvider(BaseLLMProvider):
         
         logger.info("mock_provider.extracted", count=len(facts))
         return facts
+
+    async def get_available_models(self) -> List[str]:
+        """Returns a list of mock model IDs."""
+        return ["mock", "mock-reasoning", "mock-fast"]

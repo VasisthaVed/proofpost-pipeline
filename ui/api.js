@@ -45,19 +45,25 @@ const filterMaskedValues = (obj) => {
  */
 async function request(endpoint, options = {}) {
   const url = `${BASE_URL}${endpoint}`;
+  const { skipMaskFilter, ...restOptions } = options;
   const headers = {
     'Content-Type': 'application/json',
-    ...(options.headers || {})
+    ...(restOptions.headers || {})
   };
 
   try {
     const fetchOptions = {
-      ...options,
+      ...restOptions,
       headers
     };
 
-    if (fetchOptions.body && typeof fetchOptions.body === 'object') {
-      fetchOptions.body = JSON.stringify(filterMaskedValues(fetchOptions.body));
+    if (fetchOptions.body !== undefined && fetchOptions.body !== null) {
+      if (typeof fetchOptions.body === 'string') {
+        fetchOptions.body = fetchOptions.body;
+      } else if (typeof fetchOptions.body === 'object') {
+        const payload = skipMaskFilter ? fetchOptions.body : filterMaskedValues(fetchOptions.body);
+        fetchOptions.body = JSON.stringify(payload);
+      }
     }
 
     const response = await fetch(url, fetchOptions);
@@ -66,9 +72,18 @@ async function request(endpoint, options = {}) {
 
     if (!response.ok) {
       // Bridge FastAPI "detail" to Canonical Error Object
-      const message = data?.detail || `HTTP Error ${response.status}`;
+      let message = data?.detail || `HTTP Error ${response.status}`;
+      if (typeof message === 'object') message = JSON.stringify(message);
+      
       const code = data?.code || `API_ERROR_${response.status}`;
       return createError(code, message);
+    }
+
+    // Check for logical success if the backend returns a { success, message } pattern
+    if (isJson && data && typeof data.success === 'boolean' && data.success === false) {
+      let message = data.message || 'Operation failed';
+      if (typeof message === 'object') message = JSON.stringify(message);
+      return createError(data.code || 'LOGICAL_ERROR', message);
     }
 
     return {
@@ -133,13 +148,52 @@ export const api = {
    */
   getSettings: () => request('/api/settings'),
 
+  getSettingsFileRaw: () => request('/api/settings/file'),
+
+  saveSettingsFileRaw: (jsonText) => request('/api/settings/file', {
+    method: 'POST',
+    body: jsonText,
+    headers: { 'Content-Type': 'application/json' }
+  }),
+
   saveSettings: (data) => request('/api/settings', {
     method: 'POST',
     body: data
   }),
 
-  testAIKey: (provider, apiKey) => request('/api/settings/test-ai', {
+  testAIKey: (provider, apiKey, model = null) => request('/api/settings/test-ai', {
     method: 'POST',
-    body: { provider, api_key: apiKey }
-  })
+    body: { provider, api_key: apiKey, model },
+    skipMaskFilter: true
+  }),
+
+  /**
+   * AI Provider Management
+   */
+  getAiProviders: () => request('/api/ai/providers'),
+
+  saveAiProviders: (providers) => request('/api/ai/providers', {
+    method: 'POST',
+    body: { providers },
+    skipMaskFilter: true
+  }),
+
+  testAiProvider: (provider) => request('/api/ai/providers/test', {
+    method: 'POST',
+    body: provider,
+    skipMaskFilter: true
+  }),
+
+  reorderAiProviders: (providerIds) => request('/api/ai/providers/reorder', {
+    method: 'POST',
+    body: { provider_ids: providerIds }
+  }),
+
+  refreshAiModels: (provider, apiKey, configId) => request('/api/ai/providers/models', {
+    method: 'POST',
+    body: { provider, api_key: apiKey, model: configId },
+    skipMaskFilter: true
+  }),  getNgrokStatus: () => request('/api/ngrok/status'),
+
+  getAiStatus: () => request('/api/ai/status')
 };
