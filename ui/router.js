@@ -110,7 +110,7 @@ async function performNavigation(path, navOptions = {}) {
   updateTitle(viewName);
 
   try {
-    currentViewModule = await import(`./views/${viewName}.js?v=${Date.now()}`);
+    currentViewModule = await import(`./views/${viewName}.js`);
 
     const container = document.getElementById('view-container');
     if (container) {
