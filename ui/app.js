@@ -21,13 +21,14 @@ import { initToastManager } from './components/toast.js';
  * One-shot server sync before first route render (operator truth on cold load).
  */
 async function hydrateFromServer() {
-  const [h, s, pl, hist, facts, aiStat] = await Promise.all([
+  const [h, s, pl, hist, facts, aiStat, ngrokStat] = await Promise.all([
     api.getHealth(),
     api.getSettings(),
     api.getPlatforms(),
     api.getHistory(),
     api.getPendingFacts(),
-    api.getAiStatus()
+    api.getAiStatus(),
+    api.getNgrokStatus()
   ]);
   if (h.success) actions.updateHealth(h.data);
   else actions.updateHealth({ online: false });
@@ -36,6 +37,7 @@ async function hydrateFromServer() {
   if (hist.success) actions.setHistoryItems(hist.data.items || []);
   if (facts.success) actions.setPendingFacts(facts.data.items || []);
   if (aiStat.success) actions.updateAiStatus(aiStat.data);
+  if (ngrokStat.success) actions.updateNgrokStatus(ngrokStat.data);
 }
 
 /**
@@ -89,12 +91,13 @@ async function boot() {
 
   actions.setInitialized(true);
 
-  // 5. Global Health & AI Polling (fixes BUG-B11)
+  // 5. Global Health, AI, & Ngrok Polling (fixes BUG-B11)
   setInterval(async () => {
-    const [h, aiStat] = await Promise.all([api.getHealth(), api.getAiStatus()]);
+    const [h, aiStat, ngrokStat] = await Promise.all([api.getHealth(), api.getAiStatus(), api.getNgrokStatus()]);
     if (h.success) actions.updateHealth(h.data);
     else actions.updateHealth({ online: false });
     if (aiStat.success) actions.updateAiStatus(aiStat.data);
+    if (ngrokStat.success) actions.updateNgrokStatus(ngrokStat.data);
   }, 5000);
 }
 
@@ -113,6 +116,7 @@ function updateGlobalUI(state) {
   const dot = document.getElementById('global-status-dot');
   const text = document.getElementById('global-status-text');
   const aiText = document.getElementById('global-ai-status-text');
+  const ngrokText = document.getElementById('global-ngrok-status-text');
   
   if (dot) dot.setAttribute('status', state.app.api_online ? 'online' : 'offline');
   if (text) text.textContent = state.app.api_online ? 'OPERATIONAL' : 'DISCONNECTED';
@@ -120,6 +124,20 @@ function updateGlobalUI(state) {
     const p = state.app.ai_status?.working_provider?.toUpperCase() || 'MOCK';
     const m = state.app.ai_status?.working_model || '';
     aiText.textContent = `AI: ${p} ${m ? `(${m})` : ''}`;
+  }
+  if (ngrokText) {
+    const connected = state.app.ngrok_status?.connected;
+    const pubUrl = state.app.ngrok_status?.public_url || '';
+    if (connected && pubUrl) {
+      const cleanUrl = pubUrl.replace('https://', '');
+      ngrokText.textContent = cleanUrl.length > 20 ? cleanUrl.substring(0, 18) + '...' : cleanUrl;
+      ngrokText.className = 'text-xs font-semibold mono text-brand uppercase';
+      ngrokText.title = `Active ngrok tunnel: ${pubUrl}`;
+    } else {
+      ngrokText.textContent = 'NGROK: DISCONNECTED';
+      ngrokText.className = 'text-xs font-semibold mono text-secondary uppercase';
+      ngrokText.title = 'ngrok tunnel not running on port 4040';
+    }
   }
 
   document.querySelectorAll('.nav-item').forEach(item => {

@@ -32,7 +32,8 @@ const initialState = {
     theme: localStorage.getItem(STORAGE_KEYS.THEME) || 'dark',
     last_health_check: null,
     server_hydrated: false,
-    ai_status: { working_provider: 'None', working_model: 'None', working_id: 'None', total_enabled: 0, failover_chain: [] }
+    ai_status: { working_provider: 'None', working_model: 'None', working_id: 'None', total_enabled: 0, failover_chain: [] },
+    ngrok_status: { connected: false, public_url: null }
   },
   ui: {
     activeModal: null, // { title, body, confirmLabel, onConfirm }
@@ -205,6 +206,14 @@ export const actions = {
 
   updateAiStatus(status) {
     this._mutate(() => { store.app.ai_status = status; });
+  },
+
+  /**
+   * Update ngrok tunnel connection status
+   * @param {object} status 
+   */
+  updateNgrokStatus(status) {
+    this._mutate(() => { store.app.ngrok_status = status; });
   },
 
   setRoute(route) {

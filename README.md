@@ -11,13 +11,13 @@
     <a href="#quickstart"><strong>Quickstart</strong></a> · 
     <a href="#architecture"><strong>Architecture</strong></a> · 
     <a href="#configuration"><strong>Configuration</strong></a> · 
-    <a href="./docs/PUBLIC_ENGINEERING_PHILOSOPHY.md"><strong>Philosophy</strong></a> · 
+    <a href="./docs/old_docs/PUBLIC_ENGINEERING_PHILOSOPHY.md"><strong>Philosophy</strong></a> · 
     <a href="./docs/ROADMAP.md"><strong>Roadmap</strong></a>
   </p>
   <p align="center">
     <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=flat-square&logo=python&logoColor=white" alt="Python 3.10+"/>
     <img src="https://img.shields.io/badge/SQLite-local--first-003B57?style=flat-square&logo=sqlite&logoColor=white" alt="SQLite"/>
-    <img src="https://img.shields.io/badge/status-V1.1-blue?style=flat-square" alt="Status"/>
+    <img src="https://img.shields.io/badge/status-V1.2-blue?style=flat-square" alt="Status"/>
     <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"/>
     <img src="https://img.shields.io/badge/license-MIT-green?style=flat-square" alt="License"/>
   </p>
@@ -34,7 +34,7 @@ Every merged PR, every performance fix, every breaking change — these are valu
 **ProofPost closes that gap.** It watches your GitHub activity, extracts the engineering facts, verifies them against the actual source code, and prepares professional draft posts — all under your full editorial control.
 
 > [!IMPORTANT]
-> ProofPost is currently in **V1.1**. The core pipeline is stable for single-user local use, including live platform previews and real-time observability telemetry. See [V1 Limitations](#v1-limitations) before deploying.
+> ProofPost is currently in **V1.2**. The core pipeline is stable for single-user local use, including live platform previews, real-time observability telemetry, and hardened HMAC webhook security. See [V1 Limitations](#v1-limitations) before deploying.
 
 ---
 
@@ -279,14 +279,22 @@ ProofPost/
 │   └── linkedin.py             # LinkedIn API
 │
 ├── ui/
-│   └── index.html              # Operator dashboard (single-file, vanilla JS)
+│   ├── index.html              # Shell container
+│   ├── app.js                  # Entry point
+│   ├── api.js                  # API boundary
+│   ├── router.js               # SPA routing
+│   ├── store.js                # Reactive state
+│   ├── components/             # Web components
+│   ├── views/                  # View modules
+│   └── styles/                 # CSS design system
 │
 ├── tests/                      # Full pytest suite (17 test files)
 │
 └── docs/                       # Architecture, governance, API contracts
     ├── governance/             # System constitution & AI rules
-    ├── ui/                    # Dashboard architecture docs
-    └── PUBLIC_ENGINEERING_PHILOSOPHY.md
+    ├── v1.1/                   # Dashboard architecture docs
+    └── old_docs/
+        └── PUBLIC_ENGINEERING_PHILOSOPHY.md
 ```
 
 ---
@@ -346,8 +354,8 @@ ProofPost V1 is a single-operator tool. These are known constraints, not bugs:
 
 | Version | Focus |
 |---|---|
-| **V1.1 (Current)** | Platform previews, connection health checks, settings validation, full frontend stabilization |
-| **V1.2** | Batch approval, advanced platform-specific formatting, and Draft AI refinement |
+| **V1.1** | Platform previews, connection health checks, settings validation, full frontend stabilization |
+| **V1.2 (Current)** | Hardened HMAC webhook security, AI model discovery auth fixes, DLQ atomic transactions, sanitized settings masking |
 | **V2.0** | Multi-platform orchestration, MCP integration, multi-user support |
 
 See the full [Roadmap](./docs/ROADMAP.md).

@@ -155,7 +155,7 @@ async def generate_with_provider(provider: Any, prompt: str) -> str:
         }
         if provider.__class__.__name__ == "OpenRouterProvider":
             headers.update({
-                "HTTP-Referer": "https://github.com/VasisthaVed/proofpost-pipeline",
+                "HTTP-Referer": "https://proofpost.local",
                 "X-Title": "ProofPost"
             })
         payload = json.dumps({

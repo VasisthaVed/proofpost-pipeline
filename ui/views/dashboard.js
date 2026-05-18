@@ -24,6 +24,7 @@ function dashboardRenderSignature(state) {
     historyLen: state.history.items.length,
     dry_run: state.settings.dry_run,
     dev_mode: state.settings.dev_mode,
+    ngrok_status: state.app.ngrok_status,
     viewError
   });
 }
@@ -134,24 +135,50 @@ export function render(container, state) {
             </div>
           </div>
 
-          <div class="card overflow-hidden">
-            <div class="p-4 border-b bg-raised">
-              <h3 class="m-0">System Info</h3>
+          <div class="flex flex-col gap-6">
+            <div class="card overflow-hidden">
+              <div class="p-4 border-b bg-raised">
+                <h3 class="m-0">System Info</h3>
+              </div>
+              <div class="p-6">
+                <div class="flex flex-col gap-4">
+                  <div>
+                    <span class="label">Version</span>
+                    <div class="text-sm font-mono">v1.1.1-stable</div>
+                  </div>
+                  <div>
+                    <span class="label">Environment</span>
+                    <div class="badge badge--info">${state.settings.dev_mode ? 'Development' : 'Production'}</div>
+                  </div>
+                  <div>
+                    <span class="label">Safety Gate</span>
+                    <div class="badge badge--${state.settings.dry_run ? 'warning' : 'success'}">${state.settings.dry_run ? 'Dry Run Active' : 'Live Publishing'}</div>
+                  </div>
+                </div>
+              </div>
             </div>
-            <div class="p-6">
-              <div class="flex flex-col gap-4">
-                <div>
-                  <span class="label">Version</span>
-                  <div class="text-sm font-mono">v1.1.1-stable</div>
-                </div>
-                <div>
-                  <span class="label">Environment</span>
-                  <div class="badge badge--info">${state.settings.dev_mode ? 'Development' : 'Production'}</div>
-                </div>
-                <div>
-                  <span class="label">Safety Gate</span>
-                  <div class="badge badge--${state.settings.dry_run ? 'warning' : 'success'}">${state.settings.dry_run ? 'Dry Run Active' : 'Live Publishing'}</div>
-                </div>
+
+            <div class="card overflow-hidden">
+              <div class="p-4 border-b bg-raised flex justify-between items-center">
+                <h3 class="m-0">Webhook Tunnel</h3>
+                <pp-status-dot status="${state.app.ngrok_status?.connected ? 'online' : 'offline'}"></pp-status-dot>
+              </div>
+              <div class="p-6">
+                ${state.app.ngrok_status?.connected && state.app.ngrok_status?.public_url ? `
+                  <div class="flex flex-col gap-2">
+                    <span class="label">GitHub Webhook URL</span>
+                    <div class="p-2 bg-raised rounded font-mono text-xs break-all border border-subtle select-all">
+                      ${escapeHtml(state.app.ngrok_status.public_url)}/webhook/github
+                    </div>
+                    <span class="text-xs text-success mt-1">✓ Active forwarding tunnel detected</span>
+                  </div>
+                ` : `
+                  <div class="flex flex-col gap-2">
+                    <span class="label">Status</span>
+                    <div class="text-sm text-secondary font-medium">No active ngrok tunnel detected</div>
+                    <div class="text-xs text-muted mt-1">Run <code class="mono bg-raised px-1 rounded text-xs">ngrok http 7821</code> in your terminal to receive GitHub webhooks.</div>
+                  </div>
+                `}
               </div>
             </div>
           </div>
